@@ -37,12 +37,15 @@ clean-targets:         # directories to be removed by `dbt clean`
 
 models:
   lakehouse_aws:
-    # Applies to all files under models/example/
-    example:
-      +materialized: table
     source:
       +schema: source
+      +table_type: iceberg
+      +format: parquet
     stage:
       +schema: stage
+      +table_type: iceberg
+      +format: parquet
     main:
       +schema: main
+      +table_type: iceberg
+      +format: parquet
