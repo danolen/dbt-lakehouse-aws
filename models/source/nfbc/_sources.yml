@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: nfbc
+    database: AwsDataCatalog
+    schema: nfbc
+    tables:
+      - name: standings
+        external:
+          location: s3://dn-lakehouse-dev/nfbc/standings/
