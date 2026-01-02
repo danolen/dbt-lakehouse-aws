@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: mapping
+    database: AwsDataCatalog
+    schema: mapping
+    tables:
+      - name: player_id_map
+        external:
+          location: s3://dn-lakehouse-dev/mapping/mpd_player_id_map/

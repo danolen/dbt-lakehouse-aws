@@ -8,3 +8,6 @@ sources:
       - name: standings
         external:
           location: s3://dn-lakehouse-dev/nfbc/standings/
+      - name: players
+        external:
+          location: s3://dn-lakehouse-dev/nfbc/players/
