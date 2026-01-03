@@ -18,9 +18,9 @@ select ids.id,
     cast(proj.hr as double)/cast(proj.pa as double) as hr,
     cast(proj.rbi as double)/cast(proj.pa as double) as rbi,
     cast(proj.sb as double)/cast(proj.pa as double) as sb,
-    cast(proj.avg as double)/cast(proj.pa as double) as avg,
-    cast(proj.obp as double)/cast(proj.pa as double) as obp,
-    cast(proj.slg as double)/cast(proj.pa as double) as slg,
+    cast(proj.avg as double) as avg,
+    cast(proj.obp as double) as obp,
+    cast(proj.slg as double) as slg,
     cast(proj.bb as double)/cast(proj.pa as double) as bb,
     cast(proj.hbp as double)/cast(proj.pa as double) as hbp
 from {{ ref('src_fangraphs_projections_preseason_hitting') }} proj
