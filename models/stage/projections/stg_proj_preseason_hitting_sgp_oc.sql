@@ -66,7 +66,7 @@ sgps as (
 )
 
 select *,
-    case when pos like '%UT%' then r_sgp + hr_sgp + rbi_sgp + sb_sgp + avg_sgp - 1
-        when pos like '%,%' then r_sgp + hr_sgp + rbi_sgp + sb_sgp + avg_sgp + 1
+    case when pos like '%UT%' then r_sgp + hr_sgp + rbi_sgp + sb_sgp + avg_sgp - 0.5
+        when pos like '%,%' then r_sgp + hr_sgp + rbi_sgp + sb_sgp + avg_sgp + 0.5
         else r_sgp + hr_sgp + rbi_sgp + sb_sgp + avg_sgp end as sgp
 from sgps
