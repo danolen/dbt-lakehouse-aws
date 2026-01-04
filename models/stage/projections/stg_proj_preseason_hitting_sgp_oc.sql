@@ -60,13 +60,13 @@ sgps as (
         b.hr/s.sgp_hr as hr_sgp,
         b.rbi/s.sgp_rbi as rbi_sgp,
         b.sb/s.sgp_sb as sb_sgp,
-        ((h + 1732.0) / (ab + 6882.0) - 0.2517) / s.sgp_avg as avg_sgp
+        ((h + 1765.0) / (ab + 6958.0) - 0.2536) / s.sgp_avg as avg_sgp
     from base b
     cross join sgp_constants s
 )
 
 select *,
-    case when pos like '%UT%' then r_sgp + hr_sgp + rbi_sgp + sb_sgp + avg_sgp - 0.5
-        when pos like '%,%' then r_sgp + hr_sgp + rbi_sgp + sb_sgp + avg_sgp + 0.5
+    case when pos like '%UT%' then r_sgp + hr_sgp + rbi_sgp + sb_sgp + avg_sgp - 0.25
+        when pos like '%,%' then r_sgp + hr_sgp + rbi_sgp + sb_sgp + avg_sgp + 0.25
         else r_sgp + hr_sgp + rbi_sgp + sb_sgp + avg_sgp end as sgp
 from sgps

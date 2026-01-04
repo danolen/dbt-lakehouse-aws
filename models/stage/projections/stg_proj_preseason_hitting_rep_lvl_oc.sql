@@ -28,29 +28,44 @@ remaining_util as (
             else 'N' end as include_in_pool_ut
     from remaining_pos_group
     where include_in_pool_mi_ci = 'N'
+),
+
+draftable_pool as (
+    select id,
+        name,
+        position,
+        sgp
+    from base
+    where include_in_pool = 'Y'
+
+    union all 
+
+    select id,
+        name,
+        position,
+        sgp
+    from remaining_pos_group
+    where include_in_pool_mi_ci = 'Y'
+
+    union all 
+
+    select id,
+        name,
+        position,
+        sgp
+    from remaining_util
+    where include_in_pool_ut = 'Y'
+),
+
+rep_lvl as (
+    select position,
+        min(sgp) as replvl
+    from draftable_pool
+    where position != 'UT'
+    group by 1
 )
 
-select id,
-    name,
-    position,
-    sgp
-from base
-where include_in_pool = 'Y'
-
-union all 
-
-select id,
-    name,
-    position,
-    sgp
-from remaining_pos_group
-where include_in_pool_mi_ci = 'Y'
-
-union all 
-
-select id,
-    name,
-    position,
-    sgp
-from remaining_util
-where include_in_pool_ut = 'Y'
+select *
+from rep_lvl
+union all
+select 'UT' as position, (select max(replvl) from rep_lvl) as replvl
