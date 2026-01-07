@@ -49,7 +49,7 @@ with base as (
         replvl,
         sgpar,
         value
-    from {{ ref('stg_proj_preseason_hitting_values_oc') }}
+    from {{ ref('stg_proj_preseason_hitting_values_50s') }}
 
     union all
 
@@ -97,7 +97,7 @@ with base as (
         replvl,
         sgpar,
         value
-    from {{ ref('stg_proj_preseason_pitching_values_oc') }}
+    from {{ ref('stg_proj_preseason_pitching_values_50s') }}
 )
 
 select row_number() over (order by b.value desc) as rank,
@@ -109,5 +109,5 @@ select row_number() over (order by b.value desc) as rank,
 from base b
 left join {{ ref('src_nfbc_adp') }} adp
     on b.id = adp.playerid
-    and adp._filename = 'OC_ADP.tsv'
+    and adp._filename = 'Fifties_ADP.tsv'
 order by value desc

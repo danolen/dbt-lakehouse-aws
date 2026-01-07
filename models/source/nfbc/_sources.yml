@@ -11,3 +11,6 @@ sources:
       - name: players
         external:
           location: s3://dn-lakehouse-dev/nfbc/players/
+      - name: adp
+        external:
+          location: s3://dn-lakehouse-dev/nfbc/adp/
