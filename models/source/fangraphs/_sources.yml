@@ -1,0 +1,13 @@
+version: 2
+
+sources:
+  - name: fangraphs
+    database: AwsDataCatalog
+    schema: fangraphs
+    tables:
+      - name: projections_preseason_hitting
+        external:
+          location: s3://dn-lakehouse-dev/fangraphs/projections/preseason/hitting/
+      - name: projections_preseason_pitching
+        external:
+          location: s3://dn-lakehouse-dev/fangraphs/projections/preseason/pitching/
