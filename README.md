@@ -46,6 +46,9 @@ Although the current dataset is small, the architecture is designed to scale nat
   - Add tests and documentation
   - Make use of variables and macros to make project more modular
   - Simplify model lineage
+ 
+### Access control
+- IAM roles
 
 ### Version Control
 - Github
