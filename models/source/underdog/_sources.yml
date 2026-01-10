@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: underdog
+    database: AwsDataCatalog
+    schema: underdog
+    tables:
+      - name: adp
+        external:
+          location: s3://dn-lakehouse-dev/underdog/adp/
