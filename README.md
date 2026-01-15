@@ -55,17 +55,19 @@ Although the current dataset is small, the architecture is designed to scale nat
 
 ---
 
-## Planned future enhancements
+## Applications
 
-### Draft Tool Application
-- Use **Streamlit** to create a web app to be used in a draft
+### Draft Tool Application ✅ (Implemented)
+- **Streamlit** web app for draft preparation and tracking
 - Mobile- and desktop-friendly interface
-- Includes all of my player rankings and valuations for various fantasy baseball contest formats, including projected player stats
-- Real-time filtering and sorting
-- Access anywhere
-- Track which players have/haven't been drafted
-  - Use **Amazon DynamoDB** to track and update the drafted status of a player with the click of a button
-  - Decouple player drafted status from analytical data
+- Displays player rankings and valuations for 50s and OC fantasy formats
+- Real-time filtering by position, team, and draft status
+- Track which players have/haven't been drafted using **Amazon DynamoDB**
+  - Draft state persisted in DynamoDB tables (one per draft session)
+  - Decoupled from analytical data (mart models)
+- See `app/README.md` for setup and usage instructions
+
+## Planned future enhancements
 
 ### In-Season Tools
 - Another **Streamlit** web app to help with player add/drop decisions, lineup optimization, etc.
