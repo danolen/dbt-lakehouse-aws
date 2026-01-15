@@ -102,9 +102,9 @@ with base as (
 
 select row_number() over (order by b.value desc) as rank,
     b.*,
-    adp.adp,
-    adp.min_pick,
-    adp.max_pick,
+    cast(adp.adp as double) as adp,
+    cast(adp.min_pick as int) as min_pick,
+    cast(adp.max_pick as int) as max_pick,
     cast(adp.adp as double) - row_number() over (order by b.value desc) as rank_diff
 from base b
 left join {{ ref('src_nfbc_adp') }} adp
