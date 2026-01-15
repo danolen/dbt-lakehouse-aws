@@ -2,4 +2,11 @@
 target/
 dbt_packages/
 logs/
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.env
+.env.local
 .DS_Store
