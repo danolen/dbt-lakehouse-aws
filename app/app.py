@@ -105,7 +105,7 @@ if load_button or st.session_state[cache_key] is None:
 
 # Display the data if we have it cached
 if st.session_state[cache_key] is not None:
-    df = st.session_state[cache_key]
+    df = st.session_state[cache_key].copy()  # Make a copy so we don't modify the cached data
     cached_time = st.session_state[timestamp_key]
     
     # Format the timestamp nicely
@@ -113,5 +113,104 @@ if st.session_state[cache_key] is not None:
         time_str = cached_time.strftime("%Y-%m-%d %H:%M:%S")
         st.caption(f"📅 Data cached at: {time_str}")
     
-    st.dataframe(df, use_container_width=True)
-    st.caption(f"Showing {len(df)} players (use Refresh button to reload)")
+    st.markdown("---")
+    st.subheader("Filters & Sorting")
+    
+    # FILTERING SECTION
+    # We'll add filters in columns to keep it organized
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # Filter by position (multi-select)
+        # Get unique positions from the data - players can have multiple positions
+        if 'pos' in df.columns:
+            # Get all unique position values (like "SS", "2B/SS", "OF", etc.)
+            all_positions = set()
+            for pos_str in df['pos'].dropna():
+                # Split by common separators and add individual positions
+                if isinstance(pos_str, str):
+                    # Handle formats like "SS", "2B/SS", "OF/1B", etc.
+                    positions = pos_str.replace('/', ',').split(',')
+                    for p in positions:
+                        all_positions.add(p.strip())
+            
+            positions_list = sorted(list(all_positions))
+            selected_positions = st.multiselect(
+                "Position (can select multiple)", 
+                positions_list,
+                help="Select one or more positions. Shows players who have ANY of these positions."
+            )
+        else:
+            selected_positions = []
+    
+    with col2:
+        # Filter by team
+        if 'team' in df.columns:
+            teams = ['All'] + sorted(df['team'].dropna().unique().tolist())
+            selected_team = st.selectbox("Team", teams)
+        else:
+            selected_team = 'All'
+    
+    with col3:
+        # Search by player name
+        search_name = st.text_input("Search Player Name", "")
+    
+    # Apply filters to the dataframe
+    # Start with all data, then filter step by step
+    filtered_df = df.copy()
+    
+    # Filter by position (multi-select)
+    # Show players whose 'pos' column contains ANY of the selected positions
+    if selected_positions and 'pos' in filtered_df.columns:
+        # Create a mask: True if pos contains any of the selected positions
+        mask = filtered_df['pos'].astype(str).apply(
+            lambda pos: any(sel_pos in str(pos) for sel_pos in selected_positions)
+        )
+        filtered_df = filtered_df[mask]
+    
+    # Filter by team
+    if selected_team != 'All' and 'team' in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df['team'] == selected_team]
+    
+    # Search by name (case-insensitive)
+    if search_name and 'name' in filtered_df.columns:
+        filtered_df = filtered_df[
+            filtered_df['name'].str.contains(search_name, case=False, na=False)
+        ]
+    
+    st.markdown("---")
+    
+    # SORTING SECTION
+    st.subheader("Sorting")
+    
+    # Let user choose which column to sort by
+    sort_col1, sort_col2 = st.columns(2)
+    
+    with sort_col1:
+        # Get numeric columns for sorting (more useful than text columns)
+        numeric_cols = filtered_df.select_dtypes(include=['int64', 'float64']).columns.tolist()
+        # Also include some common text columns that make sense to sort
+        text_cols = ['name', 'team', 'pos'] if 'name' in filtered_df.columns else []
+        sort_options = ['rank'] + [col for col in numeric_cols if col != 'rank'] + text_cols
+        
+        sort_column = st.selectbox("Sort by", sort_options, index=0)
+    
+    with sort_col2:
+        sort_order = st.selectbox("Order", ["Ascending", "Descending"])
+    
+    # Apply sorting
+    ascending = sort_order == "Ascending"
+    if sort_column in filtered_df.columns:
+        filtered_df = filtered_df.sort_values(by=sort_column, ascending=ascending)
+    
+    # Display the filtered and sorted data
+    st.markdown("---")
+    st.subheader(f"Results: {len(filtered_df)} players")
+    
+    st.dataframe(filtered_df, use_container_width=True)
+    
+    # Show summary
+    if len(filtered_df) < len(df):
+        st.caption(f"Filtered from {len(df)} total players (use Refresh button to reload)")
+    else:
+        st.caption(f"Showing all {len(df)} players (use Refresh button to reload)")
