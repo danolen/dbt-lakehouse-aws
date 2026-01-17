@@ -11,11 +11,16 @@ select id,
     avg(w) as w,
     avg(qs) as qs,
     avg(k) as k,
-    max(sv) as sv,
+    avg(
+      case
+        when proj_system != 'thebat' then sv
+        else null
+      end
+    ) as sv,
     avg(era) as era,
     avg(whip) as whip,
     avg(k_per_9) as k_per_9,
     avg(bb_per_9) as bb_per_9
 from {{ ref('stg_fg_proj_preseason_pitching_per_ip') }}
-where proj_system in ('steamer','thebat')
+where proj_system in ('steamer','thebat','oopsy')
 group by id

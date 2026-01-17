@@ -1,7 +1,5 @@
 {{ config(
-    materialized = 'incremental',
-    incremental_strategy = 'merge',
-    unique_key = '_filename'
+    materialized = 'table'
 ) }}
 
 with adp as (
@@ -19,12 +17,6 @@ with adp as (
                         regexp_extract("$path", 'month=([0-9]{1,2})', 1),
                         regexp_extract("$path", 'day=([0-9]{1,2})', 1)) desc) as _rnk
     from {{ source('nfbc', 'adp') }}
-
-    {% if is_incremental() %}
-        where concat(regexp_extract("$path", 'year=([0-9]{4})', 1),
-            regexp_extract("$path", 'month=([0-9]{1,2})', 1),
-            regexp_extract("$path", 'day=([0-9]{1,2})', 1)) > (select max(_ptkey) from {{ this }}) 
-    {% endif %}
 )
 
 select *
