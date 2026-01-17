@@ -20,5 +20,5 @@ select id,
     avg(obp) as obp,
     avg(slg) as slg
 from {{ ref('stg_fg_proj_preseason_hitting_per_pa') }}
-where proj_system in ('steamer','thebat','thebat-x')
+where proj_system in ('steamer','thebat','thebat-x','oopsy')
 group by id

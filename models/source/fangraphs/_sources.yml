@@ -11,3 +11,6 @@ sources:
       - name: projections_preseason_pitching
         external:
           location: s3://dn-lakehouse-dev/fangraphs/projections/preseason/pitching/
+      - name: rosters
+        external:
+          location: s3://dn-lakehouse-dev/fangraphs/rosters/

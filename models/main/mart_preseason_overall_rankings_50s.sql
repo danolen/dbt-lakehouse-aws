@@ -98,6 +98,15 @@ with base as (
         sgpar,
         value
     from {{ ref('stg_proj_preseason_pitching_values_50s') }}
+),
+
+rosters as (
+    select rost.*,
+        ids.id
+    from {{ ref('src_fangraphs_opening_day_rosters') }} rost
+    inner join {{ ref('stg_mpd_player_id_map') }} ids
+        on rost.playerid = ids.idfangraphs
+    where concat(rost.playerid, rost.pos) != '19755SP'
 )
 
 select row_number() over (order by b.value desc) as rank,
@@ -105,9 +114,12 @@ select row_number() over (order by b.value desc) as rank,
     cast(adp.adp as double) as adp,
     cast(adp.min_pick as int) as min_pick,
     cast(adp.max_pick as int) as max_pick,
-    cast(adp.adp as double) - row_number() over (order by b.value desc) as rank_diff
+    cast(adp.adp as double) - row_number() over (order by b.value desc) as rank_diff,
+    rost.projected_opening_day_status
 from base b
 left join {{ ref('src_nfbc_adp') }} adp
     on b.id = adp.playerid
     and adp._filename = 'Fifties_ADP.tsv'
+left join rosters rost
+    on b.id = rost.id
 order by value desc

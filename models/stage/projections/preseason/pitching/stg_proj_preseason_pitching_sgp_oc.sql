@@ -39,7 +39,8 @@ sgp_constants as (
 
 sgps as (
     select b.*,
-        b.pos as position,
+        case when b.sv > 0 then 'RP'
+            else 'SP' end as position,
         b.k/s.sgp_k as k_sgp,
         b.w/s.sgp_w as w_sgp,
         b.sv/s.sgp_s as sv_sgp,
