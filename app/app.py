@@ -12,6 +12,8 @@ from datetime import datetime
 from pyathena import connect
 from pyathena.pandas.cursor import PandasCursor
 from dotenv import load_dotenv
+import boto3
+from botocore.exceptions import ClientError
 
 # Load environment variables from .env file (if it exists)
 # This makes it easy to set config without hardcoding values
@@ -34,6 +36,186 @@ ATHENA_DATABASE = os.getenv("ATHENA_DATABASE", "AwsDataCatalog")
 ATHENA_SCHEMA = os.getenv("ATHENA_SCHEMA", "dbt_main")
 ATHENA_REGION = os.getenv("ATHENA_REGION", "us-east-1")
 ATHENA_S3_OUTPUT = os.getenv("ATHENA_S3_OUTPUT", "s3://dn-lakehouse-dev/logs/athena-results/")
+
+# DynamoDB configuration for draft tracking
+DYNAMODB_REGION = os.getenv("DYNAMODB_REGION", ATHENA_REGION)
+DYNAMODB_TABLE_NAME = os.getenv("DYNAMODB_TABLE_NAME", "fantasy_baseball_draft")
+
+# SIMPLE DYNAMODB FUNCTIONS FOR DRAFT TRACKING
+def get_dynamodb_table(table_name, region):
+    """Get or create DynamoDB table for draft tracking"""
+    dynamodb = boto3.resource('dynamodb', region_name=region)
+    table = dynamodb.Table(table_name)
+    
+    try:
+        table.load()
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ResourceNotFoundException':
+            table = dynamodb.create_table(
+                TableName=table_name,
+                KeySchema=[{'AttributeName': 'player_id', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'player_id', 'AttributeType': 'S'}],
+                BillingMode='PAY_PER_REQUEST'
+            )
+            table.wait_until_exists()
+            st.success(f"Created DynamoDB table: {table_name}")
+    
+    return table
+
+def mark_player_drafted(table, player_id, player_name=None):
+    """Mark a player as drafted in DynamoDB"""
+    try:
+        # Get existing item if it exists to preserve "drafted_to_my_team" status
+        existing_item = {}
+        try:
+            response = table.get_item(Key={'player_id': str(player_id)})
+            if 'Item' in response:
+                existing_item = response['Item']
+        except:
+            pass
+        
+        table.put_item(
+            Item={
+                'player_id': str(player_id),
+                'drafted': True,
+                'drafted_at': datetime.now().isoformat(),
+                'player_name': player_name or str(player_id),
+                'drafted_to_my_team': existing_item.get('drafted_to_my_team', False)  # Preserve my team status
+            }
+        )
+        return True
+    except Exception as e:
+        st.error(f"Error marking player as drafted: {str(e)}")
+        return False
+
+def mark_player_undrafted(table, player_id):
+    """Mark a player as undrafted (remove from DynamoDB)"""
+    try:
+        table.delete_item(Key={'player_id': str(player_id)})
+        return True
+    except Exception as e:
+        st.error(f"Error marking player as undrafted: {str(e)}")
+        return False
+
+def mark_player_to_my_team(table, player_id, player_name=None, is_my_team=True):
+    """Mark a player as drafted to my team (also marks as drafted)"""
+    try:
+        table.put_item(
+            Item={
+                'player_id': str(player_id),
+                'drafted': True,  # Always mark as drafted if on my team
+                'drafted_to_my_team': is_my_team,
+                'drafted_at': datetime.now().isoformat(),
+                'player_name': player_name or str(player_id)
+            }
+        )
+        return True
+    except Exception as e:
+        st.error(f"Error marking player to my team: {str(e)}")
+        return False
+
+def get_drafted_players(table):
+    """Get set of all drafted player IDs"""
+    try:
+        response = table.scan()
+        drafted_ids = set()
+        for item in response.get('Items', []):
+            if item.get('drafted', False):
+                drafted_ids.add(item['player_id'])
+        
+        while 'LastEvaluatedKey' in response:
+            response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
+            for item in response.get('Items', []):
+                if item.get('drafted', False):
+                    drafted_ids.add(item['player_id'])
+        
+        return drafted_ids
+    except Exception as e:
+        st.warning(f"Error getting drafted players: {str(e)}")
+        return set()
+
+def get_my_team_players(table):
+    """Get set of all player IDs drafted to my team"""
+    try:
+        response = table.scan()
+        my_team_ids = set()
+        for item in response.get('Items', []):
+            if item.get('drafted_to_my_team', False):
+                my_team_ids.add(item['player_id'])
+        
+        while 'LastEvaluatedKey' in response:
+            response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
+            for item in response.get('Items', []):
+                if item.get('drafted_to_my_team', False):
+                    my_team_ids.add(item['player_id'])
+        
+        return my_team_ids
+    except Exception as e:
+        st.warning(f"Error getting my team players: {str(e)}")
+        return set()
+
+def list_draft_sessions(region, table_name_prefix):
+    """List all existing draft session tables"""
+    try:
+        dynamodb = boto3.client('dynamodb', region_name=region)
+        response = dynamodb.list_tables()
+        
+        # Filter tables that match our draft table prefix
+        all_tables = response.get('TableNames', [])
+        draft_tables = [t for t in all_tables if t.startswith(table_name_prefix + '_')]
+        
+        # Extract session IDs from table names (remove prefix and underscore)
+        session_ids = [t.replace(table_name_prefix + '_', '') for t in draft_tables]
+        
+        # Handle pagination
+        while 'LastEvaluatedTableName' in response:
+            response = dynamodb.list_tables(ExclusiveStartTableName=response['LastEvaluatedTableName'])
+            all_tables = response.get('TableNames', [])
+            draft_tables = [t for t in all_tables if t.startswith(table_name_prefix + '_')]
+            session_ids.extend([t.replace(table_name_prefix + '_', '') for t in draft_tables])
+        
+        return sorted(session_ids)
+    except Exception as e:
+        st.warning(f"Error listing draft sessions: {str(e)}")
+        return []
+
+# Draft session ID - dropdown with existing sessions + option to create new
+existing_sessions = list_draft_sessions(DYNAMODB_REGION, DYNAMODB_TABLE_NAME)
+default_session = os.getenv("DRAFT_SESSION_ID", "default_draft")
+
+# Add option to create new session
+session_options = ["➕ Create New Session..."] + existing_sessions
+
+# If default session exists, use it; otherwise use first option
+if default_session in existing_sessions:
+    default_index = existing_sessions.index(default_session) + 1  # +1 because of "Create New" option
+else:
+    default_index = 0  # Default to "Create New"
+
+selected_session_option = st.selectbox(
+    "Draft Session",
+    session_options,
+    index=default_index,
+    help="Select an existing draft session or create a new one"
+)
+
+# Handle session selection
+if selected_session_option == "➕ Create New Session...":
+    # Show text input for new session name
+    new_session_id = st.text_input(
+        "New Draft Session ID",
+        value="",
+        help="Enter a unique name for your new draft session",
+        key="new_session_input"
+    )
+    if new_session_id:
+        draft_session_id = new_session_id
+    else:
+        # Use a default if nothing entered
+        draft_session_id = default_session
+else:
+    # Use the selected existing session
+    draft_session_id = selected_session_option
 
 # Format selection
 format_type = st.selectbox("Select Format", ["50s", "OC"])
@@ -118,7 +300,7 @@ if st.session_state[cache_key] is not None:
     
     # FILTERING SECTION
     # We'll add filters in columns to keep it organized
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         # Filter by position (multi-select)
@@ -144,16 +326,50 @@ if st.session_state[cache_key] is not None:
             selected_positions = []
     
     with col2:
-        # Filter by team
+        # Filter by team (multi-select)
         if 'team' in df.columns:
-            teams = ['All'] + sorted(df['team'].dropna().unique().tolist())
-            selected_team = st.selectbox("Team", teams)
+            teams = sorted(df['team'].dropna().unique().tolist())
+            selected_teams = st.multiselect(
+                "Team (can select multiple)", 
+                teams,
+                help="Select one or more teams. Shows players from ANY of these teams."
+            )
         else:
-            selected_team = 'All'
+            selected_teams = []
     
     with col3:
+        # Filter by projected opening day status (multi-select)
+        if 'projected_opening_day_status' in df.columns:
+            statuses = sorted(df['projected_opening_day_status'].dropna().unique().tolist())
+            selected_statuses = st.multiselect(
+                "Opening Day Status (can select multiple)",
+                statuses,
+                help="Select one or more opening day statuses. Shows players with ANY of these statuses."
+            )
+        else:
+            selected_statuses = []
+    
+    with col4:
         # Search by player name
         search_name = st.text_input("Search Player Name", "")
+    
+    # DRAFT STATUS - Get drafted players from DynamoDB
+    draft_table_name = f"{DYNAMODB_TABLE_NAME}_{draft_session_id}"
+    draft_table = get_dynamodb_table(draft_table_name, DYNAMODB_REGION)
+    drafted_player_ids = get_drafted_players(draft_table)
+    my_team_player_ids = get_my_team_players(draft_table)
+    
+    # Add drafted status columns to dataframe
+    if 'id' in df.columns:
+        df['Drafted'] = df['id'].astype(str).isin(drafted_player_ids)
+        df['My Team'] = df['id'].astype(str).isin(my_team_player_ids)
+    
+    # Filter by draft status
+    draft_filter = st.radio(
+        "Draft Status",
+        ["All", "Drafted Only", "Undrafted Only", "My Team Only"],
+        horizontal=True
+    )
     
     # Apply filters to the dataframe
     # Start with all data, then filter step by step
@@ -168,15 +384,27 @@ if st.session_state[cache_key] is not None:
         )
         filtered_df = filtered_df[mask]
     
-    # Filter by team
-    if selected_team != 'All' and 'team' in filtered_df.columns:
-        filtered_df = filtered_df[filtered_df['team'] == selected_team]
+    # Filter by team (multi-select)
+    if selected_teams and 'team' in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df['team'].isin(selected_teams)]
+    
+    # Filter by projected opening day status (multi-select)
+    if selected_statuses and 'projected_opening_day_status' in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df['projected_opening_day_status'].isin(selected_statuses)]
     
     # Search by name (case-insensitive)
     if search_name and 'name' in filtered_df.columns:
         filtered_df = filtered_df[
             filtered_df['name'].str.contains(search_name, case=False, na=False)
         ]
+    
+    # Filter by draft status
+    if draft_filter == "Drafted Only" and 'Drafted' in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df['Drafted'] == True]
+    elif draft_filter == "Undrafted Only" and 'Drafted' in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df['Drafted'] == False]
+    elif draft_filter == "My Team Only" and 'My Team' in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df['My Team'] == True]
     
     st.markdown("---")
     
@@ -203,14 +431,140 @@ if st.session_state[cache_key] is not None:
     if sort_column in filtered_df.columns:
         filtered_df = filtered_df.sort_values(by=sort_column, ascending=ascending)
     
-    # Display the filtered and sorted data
+    # Show summary BEFORE the table (so table can be at bottom)
     st.markdown("---")
-    st.subheader(f"Results: {len(filtered_df)} players")
-    
-    st.dataframe(filtered_df, use_container_width=True)
-    
-    # Show summary
     if len(filtered_df) < len(df):
         st.caption(f"Filtered from {len(df)} total players (use Refresh button to reload)")
     else:
         st.caption(f"Showing all {len(df)} players (use Refresh button to reload)")
+    
+    # Show draft summary
+    if 'Drafted' in df.columns:
+        total_drafted = df['Drafted'].sum()
+        total_my_team = df['My Team'].sum() if 'My Team' in df.columns else 0
+        st.info(f"📊 **Draft Summary:** {total_drafted} players drafted ({total_my_team} on my team) out of {len(df)} total players")
+    
+    # Display the filtered and sorted data
+    st.markdown("---")
+    st.subheader(f"Results: {len(filtered_df)} players")
+    
+    # Prepare dataframe for editing - only include specified columns in specified order
+    desired_columns = [
+        'rank', 'Drafted', 'My Team', 'id', 'name', 'team', 'pos', 'adp', 
+        'min_pick', 'max_pick', 'rank_diff', 'projected_opening_day_status', 
+        'value', 'pa', 'ab', 'r', 'hr', 'rbi', 'sb', 'avg', 'obp', 'slg', 
+        'ip', 'k', 'w', 'sv', 'era', 'whip'
+    ]
+    
+    # Only include columns that exist in the dataframe
+    available_columns = [col for col in desired_columns if col in filtered_df.columns]
+    display_df = filtered_df[available_columns].copy()
+    
+    # Apply rounding to numeric columns
+    # Round to whole numbers
+    whole_number_cols = ['pa', 'ab', 'r', 'hr', 'rbi', 'sb', 'ip', 'k', 'w', 'sv']
+    for col in whole_number_cols:
+        if col in display_df.columns:
+            display_df[col] = display_df[col].round(0).astype('Int64')  # Int64 allows NaN
+    
+    # Round to 3 decimal places (.000)
+    three_decimal_cols = ['avg', 'obp', 'slg']
+    for col in three_decimal_cols:
+        if col in display_df.columns:
+            display_df[col] = display_df[col].round(3)
+    
+    # Round to 2 decimal places (.00)
+    two_decimal_cols = ['era', 'whip']
+    for col in two_decimal_cols:
+        if col in display_df.columns:
+            display_df[col] = display_df[col].round(2)
+    
+    # Format value as currency with cents
+    if 'value' in display_df.columns:
+        display_df['value'] = display_df['value'].apply(
+            lambda x: f"${float(x):,.2f}" if pd.notna(x) and pd.notnull(x) else ""
+        )
+    
+    # Use st.data_editor with column configuration
+    # Both "Drafted" and "My Team" columns should be editable (as checkboxes)
+    column_config = {}
+    if 'Drafted' in display_df.columns:
+        column_config['Drafted'] = st.column_config.CheckboxColumn(
+            "Drafted",
+            help="Check to mark player as drafted",
+            default=False
+        )
+    if 'My Team' in display_df.columns:
+        column_config['My Team'] = st.column_config.CheckboxColumn(
+            "My Team",
+            help="Check to mark player as drafted to my team (also marks as drafted)",
+            default=False
+        )
+    
+    # Create list of columns that should NOT be editable
+    editable_columns = ['Drafted', 'My Team']
+    disabled_columns = [col for col in display_df.columns if col not in editable_columns]
+    
+    # Display editable dataframe
+    # When user changes a checkbox, edited_df will have the updated values
+    edited_df = st.data_editor(
+        display_df,
+        column_config=column_config,
+        use_container_width=True,
+        hide_index=True,
+        disabled=disabled_columns  # Only Drafted columns are editable
+    )
+    
+    # Check if any draft status changed and update DynamoDB
+    # Note: We need to work with the original filtered_df for player lookups since display_df has formatted values
+    if ('Drafted' in edited_df.columns or 'My Team' in edited_df.columns) and 'id' in edited_df.columns:
+        # Create dictionaries of original statuses for comparison
+        # Use filtered_df to get original values (before formatting)
+        original_drafted = {}
+        original_my_team = {}
+        if 'Drafted' in filtered_df.columns and 'id' in filtered_df.columns:
+            for _, row in filtered_df.iterrows():
+                player_id = str(row['id'])
+                # Match by id to get original status
+                original_drafted[player_id] = row['Drafted']
+        if 'My Team' in filtered_df.columns and 'id' in filtered_df.columns:
+            for _, row in filtered_df.iterrows():
+                player_id = str(row['id'])
+                original_my_team[player_id] = row['My Team']
+        
+        # Check each row in edited dataframe
+        changes_made = False
+        for _, row in edited_df.iterrows():
+            player_id = str(row['id'])
+            player_name = row.get('name', 'Unknown')
+            
+            new_drafted = row.get('Drafted', False) if 'Drafted' in edited_df.columns else False
+            new_my_team = row.get('My Team', False) if 'My Team' in edited_df.columns else False
+            original_drafted_status = original_drafted.get(player_id, False)
+            original_my_team_status = original_my_team.get(player_id, False)
+            
+            # Priority 1: Handle "My Team" changes
+            # If checked, mark as my team AND as drafted
+            # If unchecked, just unmark as my team (keep drafted status)
+            if 'My Team' in edited_df.columns:
+                if new_my_team != original_my_team_status:
+                    mark_player_to_my_team(draft_table, player_id, player_name, new_my_team)
+                    changes_made = True
+                    # If marking as my team, ensure drafted is also true
+                    if new_my_team and not new_drafted:
+                        mark_player_drafted(draft_table, player_id, player_name)
+            
+            # Priority 2: Handle "Drafted" changes (only if my team didn't change in this edit)
+            # If unchecked, also uncheck my team (can't be on my team if not drafted)
+            if 'Drafted' in edited_df.columns:
+                if new_drafted != original_drafted_status:
+                    if new_drafted:
+                        mark_player_drafted(draft_table, player_id, player_name)
+                    else:
+                        # If unchecking drafted, delete from DynamoDB (which removes both drafted and my team status)
+                        mark_player_undrafted(draft_table, player_id)
+                    changes_made = True
+        
+        # Only rerun if changes were actually made
+        if changes_made:
+            st.rerun()  # Refresh to show updated status
