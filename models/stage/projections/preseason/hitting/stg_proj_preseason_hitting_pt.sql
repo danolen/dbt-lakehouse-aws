@@ -4,16 +4,22 @@
     )
 }}
 
+with pas as (
+    select id,
+        pa,
+        proj_system
+    from {{ ref('stg_fg_proj_preseason_hitting_per_pa') }}
+
+    union all
+
+    select id,
+        pa,
+        proj_system
+    from {{ ref('stg_razzball_proj_preseason_hitting_per_pa') }}
+)
+
 select id,
     avg(pa) as pa
-from {{ ref('stg_fg_proj_preseason_hitting_per_pa') }}
-where proj_system in ('depthcharts','atc','thebat-x')
-group by id
-
-union all
-
-select id,
-    avg(pa) as pa
-from {{ ref('stg_razzball_proj_preseason_hitting_per_pa') }}
-where proj_system = 'razzball'
+from pas
+where proj_system in ('depthcharts','atc','thebat-x','razzball')
 group by id
