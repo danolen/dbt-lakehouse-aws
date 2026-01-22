@@ -14,6 +14,7 @@ from pyathena.pandas.cursor import PandasCursor
 from dotenv import load_dotenv
 import boto3
 from botocore.exceptions import ClientError
+import plotly.graph_objects as go
 
 # Load environment variables from .env file (if it exists)
 # This makes it easy to set config without hardcoding values
@@ -29,6 +30,15 @@ st.set_page_config(
 # Title
 st.title("⚾ Fantasy Baseball Draft Tool")
 st.markdown("View player rankings from your dbt mart tables")
+
+# Page navigation
+page = st.radio(
+    "Navigation",
+    ["📊 Draft Table", "📈 ADP Chart"],
+    horizontal=True,
+    label_visibility="collapsed"
+)
+st.markdown("---")
 
 # Configuration - read from environment variables, with defaults as fallback
 # You can set these in a .env file or as environment variables
@@ -285,43 +295,43 @@ if load_button or st.session_state[cache_key] is None:
             4. Check that the schema and table names match your setup
             """)
 
-# Display the data if we have it cached
-if st.session_state[cache_key] is not None:
-    df = st.session_state[cache_key].copy()  # Make a copy so we don't modify the cached data
-    cached_time = st.session_state[timestamp_key]
+# Helper function to render filters and return filtered dataframe
+def render_filters_and_apply(df, draft_table):
+    """Render filter UI and return filtered dataframe"""
+    st.subheader("Filters")
     
-    # Format the timestamp nicely
-    if cached_time:
-        time_str = cached_time.strftime("%Y-%m-%d %H:%M:%S")
-        st.caption(f"📅 Data cached at: {time_str}")
-    
-    st.markdown("---")
-    st.subheader("Filters & Sorting")
+    # Initialize filter state in session_state if not exists
+    filter_key = f"filters_{format_type}"
+    if filter_key not in st.session_state:
+        st.session_state[filter_key] = {
+            'selected_positions': [],
+            'selected_teams': [],
+            'selected_statuses': [],
+            'search_name': '',
+            'draft_filter': 'All'
+        }
     
     # FILTERING SECTION
-    # We'll add filters in columns to keep it organized
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         # Filter by position (multi-select)
-        # Get unique positions from the data - players can have multiple positions
         if 'pos' in df.columns:
-            # Get all unique position values (like "SS", "2B/SS", "OF", etc.)
             all_positions = set()
             for pos_str in df['pos'].dropna():
-                # Split by common separators and add individual positions
                 if isinstance(pos_str, str):
-                    # Handle formats like "SS", "2B/SS", "OF/1B", etc.
                     positions = pos_str.replace('/', ',').split(',')
                     for p in positions:
                         all_positions.add(p.strip())
-            
             positions_list = sorted(list(all_positions))
             selected_positions = st.multiselect(
                 "Position (can select multiple)", 
                 positions_list,
-                help="Select one or more positions. Shows players who have ANY of these positions."
+                default=st.session_state[filter_key]['selected_positions'],
+                help="Select one or more positions. Shows players who have ANY of these positions.",
+                key=f"filter_pos_{format_type}"
             )
+            st.session_state[filter_key]['selected_positions'] = selected_positions
         else:
             selected_positions = []
     
@@ -332,8 +342,11 @@ if st.session_state[cache_key] is not None:
             selected_teams = st.multiselect(
                 "Team (can select multiple)", 
                 teams,
-                help="Select one or more teams. Shows players from ANY of these teams."
+                default=st.session_state[filter_key]['selected_teams'],
+                help="Select one or more teams. Shows players from ANY of these teams.",
+                key=f"filter_team_{format_type}"
             )
+            st.session_state[filter_key]['selected_teams'] = selected_teams
         else:
             selected_teams = []
     
@@ -344,18 +357,24 @@ if st.session_state[cache_key] is not None:
             selected_statuses = st.multiselect(
                 "Opening Day Status (can select multiple)",
                 statuses,
-                help="Select one or more opening day statuses. Shows players with ANY of these statuses."
+                default=st.session_state[filter_key]['selected_statuses'],
+                help="Select one or more opening day statuses. Shows players with ANY of these statuses.",
+                key=f"filter_status_{format_type}"
             )
+            st.session_state[filter_key]['selected_statuses'] = selected_statuses
         else:
             selected_statuses = []
     
     with col4:
         # Search by player name
-        search_name = st.text_input("Search Player Name", "")
+        search_name = st.text_input(
+            "Search Player Name", 
+            value=st.session_state[filter_key]['search_name'],
+            key=f"filter_search_{format_type}"
+        )
+        st.session_state[filter_key]['search_name'] = search_name
     
     # DRAFT STATUS - Get drafted players from DynamoDB
-    draft_table_name = f"{DYNAMODB_TABLE_NAME}_{draft_session_id}"
-    draft_table = get_dynamodb_table(draft_table_name, DYNAMODB_REGION)
     drafted_player_ids = get_drafted_players(draft_table)
     my_team_player_ids = get_my_team_players(draft_table)
     
@@ -368,31 +387,31 @@ if st.session_state[cache_key] is not None:
     draft_filter = st.radio(
         "Draft Status",
         ["All", "Drafted Only", "Undrafted Only", "My Team Only"],
-        horizontal=True
+        index=["All", "Drafted Only", "Undrafted Only", "My Team Only"].index(st.session_state[filter_key]['draft_filter']),
+        horizontal=True,
+        key=f"filter_draft_{format_type}"
     )
+    st.session_state[filter_key]['draft_filter'] = draft_filter
     
     # Apply filters to the dataframe
-    # Start with all data, then filter step by step
     filtered_df = df.copy()
     
-    # Filter by position (multi-select)
-    # Show players whose 'pos' column contains ANY of the selected positions
+    # Filter by position
     if selected_positions and 'pos' in filtered_df.columns:
-        # Create a mask: True if pos contains any of the selected positions
         mask = filtered_df['pos'].astype(str).apply(
             lambda pos: any(sel_pos in str(pos) for sel_pos in selected_positions)
         )
         filtered_df = filtered_df[mask]
     
-    # Filter by team (multi-select)
+    # Filter by team
     if selected_teams and 'team' in filtered_df.columns:
         filtered_df = filtered_df[filtered_df['team'].isin(selected_teams)]
     
-    # Filter by projected opening day status (multi-select)
+    # Filter by projected opening day status
     if selected_statuses and 'projected_opening_day_status' in filtered_df.columns:
         filtered_df = filtered_df[filtered_df['projected_opening_day_status'].isin(selected_statuses)]
     
-    # Search by name (case-insensitive)
+    # Search by name
     if search_name and 'name' in filtered_df.columns:
         filtered_df = filtered_df[
             filtered_df['name'].str.contains(search_name, case=False, na=False)
@@ -406,32 +425,26 @@ if st.session_state[cache_key] is not None:
     elif draft_filter == "My Team Only" and 'My Team' in filtered_df.columns:
         filtered_df = filtered_df[filtered_df['My Team'] == True]
     
-    st.markdown("---")
+    return filtered_df, draft_table
+
+# Display the data if we have it cached
+if st.session_state[cache_key] is not None:
+    df = st.session_state[cache_key].copy()  # Make a copy so we don't modify the cached data
+    cached_time = st.session_state[timestamp_key]
     
-    # SORTING SECTION
-    st.subheader("Sorting")
+    # Format the timestamp nicely
+    if cached_time:
+        time_str = cached_time.strftime("%Y-%m-%d %H:%M:%S")
+        st.caption(f"📅 Data cached at: {time_str}")
     
-    # Let user choose which column to sort by
-    sort_col1, sort_col2 = st.columns(2)
+    # Get draft table
+    draft_table_name = f"{DYNAMODB_TABLE_NAME}_{draft_session_id}"
+    draft_table = get_dynamodb_table(draft_table_name, DYNAMODB_REGION)
     
-    with sort_col1:
-        # Get numeric columns for sorting (more useful than text columns)
-        numeric_cols = filtered_df.select_dtypes(include=['int64', 'float64']).columns.tolist()
-        # Also include some common text columns that make sense to sort
-        text_cols = ['name', 'team', 'pos'] if 'name' in filtered_df.columns else []
-        sort_options = ['rank'] + [col for col in numeric_cols if col != 'rank'] + text_cols
-        
-        sort_column = st.selectbox("Sort by", sort_options, index=0)
+    # Render filters and get filtered dataframe
+    filtered_df, draft_table = render_filters_and_apply(df, draft_table)
     
-    with sort_col2:
-        sort_order = st.selectbox("Order", ["Ascending", "Descending"])
-    
-    # Apply sorting
-    ascending = sort_order == "Ascending"
-    if sort_column in filtered_df.columns:
-        filtered_df = filtered_df.sort_values(by=sort_column, ascending=ascending)
-    
-    # Show summary BEFORE the table (so table can be at bottom)
+    # Show summary
     st.markdown("---")
     if len(filtered_df) < len(df):
         st.caption(f"Filtered from {len(df)} total players (use Refresh button to reload)")
@@ -444,127 +457,283 @@ if st.session_state[cache_key] is not None:
         total_my_team = df['My Team'].sum() if 'My Team' in df.columns else 0
         st.info(f"📊 **Draft Summary:** {total_drafted} players drafted ({total_my_team} on my team) out of {len(df)} total players")
     
-    # Display the filtered and sorted data
-    st.markdown("---")
-    st.subheader(f"Results: {len(filtered_df)} players")
-    
-    # Prepare dataframe for editing - only include specified columns in specified order
-    desired_columns = [
-        'rank', 'Drafted', 'My Team', 'id', 'name', 'team', 'pos', 'adp', 
-        'min_pick', 'max_pick', 'rank_diff', 'projected_opening_day_status', 
-        'value', 'pa', 'ab', 'r', 'hr', 'rbi', 'sb', 'avg', 'obp', 'slg', 
-        'ip', 'k', 'w', 'sv', 'era', 'whip'
-    ]
-    
-    # Only include columns that exist in the dataframe
-    available_columns = [col for col in desired_columns if col in filtered_df.columns]
-    display_df = filtered_df[available_columns].copy()
-    
-    # Apply rounding to numeric columns
-    # Round to whole numbers
-    whole_number_cols = ['pa', 'ab', 'r', 'hr', 'rbi', 'sb', 'ip', 'k', 'w', 'sv']
-    for col in whole_number_cols:
-        if col in display_df.columns:
-            display_df[col] = display_df[col].round(0).astype('Int64')  # Int64 allows NaN
-    
-    # Round to 3 decimal places (.000)
-    three_decimal_cols = ['avg', 'obp', 'slg']
-    for col in three_decimal_cols:
-        if col in display_df.columns:
-            display_df[col] = display_df[col].round(3)
-    
-    # Round to 2 decimal places (.00)
-    two_decimal_cols = ['era', 'whip']
-    for col in two_decimal_cols:
-        if col in display_df.columns:
-            display_df[col] = display_df[col].round(2)
-    
-    # Format value as currency with cents
-    if 'value' in display_df.columns:
-        display_df['value'] = display_df['value'].apply(
-            lambda x: f"${float(x):,.2f}" if pd.notna(x) and pd.notnull(x) else ""
-        )
-    
-    # Use st.data_editor with column configuration
-    # Both "Drafted" and "My Team" columns should be editable (as checkboxes)
-    column_config = {}
-    if 'Drafted' in display_df.columns:
-        column_config['Drafted'] = st.column_config.CheckboxColumn(
-            "Drafted",
-            help="Check to mark player as drafted",
-            default=False
-        )
-    if 'My Team' in display_df.columns:
-        column_config['My Team'] = st.column_config.CheckboxColumn(
-            "My Team",
-            help="Check to mark player as drafted to my team (also marks as drafted)",
-            default=False
-        )
-    
-    # Create list of columns that should NOT be editable
-    editable_columns = ['Drafted', 'My Team']
-    disabled_columns = [col for col in display_df.columns if col not in editable_columns]
-    
-    # Display editable dataframe
-    # When user changes a checkbox, edited_df will have the updated values
-    edited_df = st.data_editor(
-        display_df,
-        column_config=column_config,
-        use_container_width=True,
-        hide_index=True,
-        disabled=disabled_columns  # Only Drafted columns are editable
-    )
-    
-    # Check if any draft status changed and update DynamoDB
-    # Note: We need to work with the original filtered_df for player lookups since display_df has formatted values
-    if ('Drafted' in edited_df.columns or 'My Team' in edited_df.columns) and 'id' in edited_df.columns:
-        # Create dictionaries of original statuses for comparison
-        # Use filtered_df to get original values (before formatting)
-        original_drafted = {}
-        original_my_team = {}
-        if 'Drafted' in filtered_df.columns and 'id' in filtered_df.columns:
-            for _, row in filtered_df.iterrows():
-                player_id = str(row['id'])
-                # Match by id to get original status
-                original_drafted[player_id] = row['Drafted']
-        if 'My Team' in filtered_df.columns and 'id' in filtered_df.columns:
-            for _, row in filtered_df.iterrows():
-                player_id = str(row['id'])
-                original_my_team[player_id] = row['My Team']
+    # Render different pages based on selection
+    if page == "📊 Draft Table":
+        # DRAFT TABLE PAGE
+        st.markdown("---")
+        st.subheader(f"Results: {len(filtered_df)} players")
         
-        # Check each row in edited dataframe
-        changes_made = False
-        for _, row in edited_df.iterrows():
-            player_id = str(row['id'])
-            player_name = row.get('name', 'Unknown')
-            
-            new_drafted = row.get('Drafted', False) if 'Drafted' in edited_df.columns else False
-            new_my_team = row.get('My Team', False) if 'My Team' in edited_df.columns else False
-            original_drafted_status = original_drafted.get(player_id, False)
-            original_my_team_status = original_my_team.get(player_id, False)
-            
-            # Priority 1: Handle "My Team" changes
-            # If checked, mark as my team AND as drafted
-            # If unchecked, just unmark as my team (keep drafted status)
-            if 'My Team' in edited_df.columns:
-                if new_my_team != original_my_team_status:
-                    mark_player_to_my_team(draft_table, player_id, player_name, new_my_team)
-                    changes_made = True
-                    # If marking as my team, ensure drafted is also true
-                    if new_my_team and not new_drafted:
-                        mark_player_drafted(draft_table, player_id, player_name)
-            
-            # Priority 2: Handle "Drafted" changes (only if my team didn't change in this edit)
-            # If unchecked, also uncheck my team (can't be on my team if not drafted)
-            if 'Drafted' in edited_df.columns:
-                if new_drafted != original_drafted_status:
-                    if new_drafted:
-                        mark_player_drafted(draft_table, player_id, player_name)
-                    else:
-                        # If unchecking drafted, delete from DynamoDB (which removes both drafted and my team status)
-                        mark_player_undrafted(draft_table, player_id)
-                    changes_made = True
+        # Prepare dataframe for editing - only include specified columns in specified order
+        desired_columns = [
+            'rank', 'Drafted', 'My Team', 'id', 'name', 'team', 'pos', 'adp', 
+            'min_pick', 'max_pick', 'rank_diff', 'projected_opening_day_status', 
+            'value', 'pa', 'ab', 'r', 'hr', 'rbi', 'sb', 'avg', 'obp', 'slg', 
+            'ip', 'k', 'w', 'sv', 'era', 'whip'
+        ]
         
-        # Only rerun if changes were actually made
-        if changes_made:
-            st.rerun()  # Refresh to show updated status
+        # Only include columns that exist in the dataframe
+        available_columns = [col for col in desired_columns if col in filtered_df.columns]
+        display_df = filtered_df[available_columns].copy()
+        
+        # Apply rounding to numeric columns
+        # Round to whole numbers
+        whole_number_cols = ['pa', 'ab', 'r', 'hr', 'rbi', 'sb', 'ip', 'k', 'w', 'sv']
+        for col in whole_number_cols:
+            if col in display_df.columns:
+                display_df[col] = display_df[col].round(0).astype('Int64')  # Int64 allows NaN
+        
+        # Round to 3 decimal places (.000)
+        three_decimal_cols = ['avg', 'obp', 'slg']
+        for col in three_decimal_cols:
+            if col in display_df.columns:
+                display_df[col] = display_df[col].round(3)
+        
+        # Round to 2 decimal places (.00)
+        two_decimal_cols = ['era', 'whip']
+        for col in two_decimal_cols:
+            if col in display_df.columns:
+                display_df[col] = display_df[col].round(2)
+        
+        # Format value as currency with cents
+        if 'value' in display_df.columns:
+            display_df['value'] = display_df['value'].apply(
+                lambda x: f"${float(x):,.2f}" if pd.notna(x) and pd.notnull(x) else ""
+            )
+        
+        # Use st.data_editor with column configuration
+        # Both "Drafted" and "My Team" columns should be editable (as checkboxes)
+        column_config = {}
+        if 'Drafted' in display_df.columns:
+            column_config['Drafted'] = st.column_config.CheckboxColumn(
+                "Drafted",
+                help="Check to mark player as drafted",
+                default=False
+            )
+        if 'My Team' in display_df.columns:
+            column_config['My Team'] = st.column_config.CheckboxColumn(
+                "My Team",
+                help="Check to mark player as drafted to my team (also marks as drafted)",
+                default=False
+            )
+        
+        # Create list of columns that should NOT be editable
+        editable_columns = ['Drafted', 'My Team']
+        disabled_columns = [col for col in display_df.columns if col not in editable_columns]
+        
+        # Display editable dataframe
+        # When user changes a checkbox, edited_df will have the updated values
+        edited_df = st.data_editor(
+            display_df,
+            column_config=column_config,
+            use_container_width=True,
+            hide_index=True,
+            disabled=disabled_columns  # Only Drafted columns are editable
+        )
+        
+        # Check if any draft status changed and update DynamoDB
+        # Note: We need to work with the original filtered_df for player lookups since display_df has formatted values
+        if ('Drafted' in edited_df.columns or 'My Team' in edited_df.columns) and 'id' in edited_df.columns:
+            # Create dictionaries of original statuses for comparison
+            # Use filtered_df to get original values (before formatting)
+            original_drafted = {}
+            original_my_team = {}
+            if 'Drafted' in filtered_df.columns and 'id' in filtered_df.columns:
+                for _, row in filtered_df.iterrows():
+                    player_id = str(row['id'])
+                    # Match by id to get original status
+                    original_drafted[player_id] = row['Drafted']
+            if 'My Team' in filtered_df.columns and 'id' in filtered_df.columns:
+                for _, row in filtered_df.iterrows():
+                    player_id = str(row['id'])
+                    original_my_team[player_id] = row['My Team']
+            
+            # Check each row in edited dataframe
+            changes_made = False
+            for _, row in edited_df.iterrows():
+                player_id = str(row['id'])
+                player_name = row.get('name', 'Unknown')
+                
+                new_drafted = row.get('Drafted', False) if 'Drafted' in edited_df.columns else False
+                new_my_team = row.get('My Team', False) if 'My Team' in edited_df.columns else False
+                original_drafted_status = original_drafted.get(player_id, False)
+                original_my_team_status = original_my_team.get(player_id, False)
+                
+                # Priority 1: Handle "My Team" changes
+                # If checked, mark as my team AND as drafted
+                # If unchecked, just unmark as my team (keep drafted status)
+                if 'My Team' in edited_df.columns:
+                    if new_my_team != original_my_team_status:
+                        mark_player_to_my_team(draft_table, player_id, player_name, new_my_team)
+                        changes_made = True
+                        # If marking as my team, ensure drafted is also true
+                        if new_my_team and not new_drafted:
+                            mark_player_drafted(draft_table, player_id, player_name)
+                
+                # Priority 2: Handle "Drafted" changes (only if my team didn't change in this edit)
+                # If unchecked, also uncheck my team (can't be on my team if not drafted)
+                if 'Drafted' in edited_df.columns:
+                    if new_drafted != original_drafted_status:
+                        if new_drafted:
+                            mark_player_drafted(draft_table, player_id, player_name)
+                        else:
+                            # If unchecking drafted, delete from DynamoDB (which removes both drafted and my team status)
+                            mark_player_undrafted(draft_table, player_id)
+                        changes_made = True
+            
+            # Only rerun if changes were actually made
+            if changes_made:
+                st.rerun()  # Refresh to show updated status
+    
+    elif page == "📈 ADP Chart":
+        # ADP CHART PAGE
+        st.markdown("---")
+        st.subheader(f"ADP Chart: {len(filtered_df)} players")
+        
+        # Input for upcoming draft pick
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            upcoming_pick = st.number_input(
+                "My Upcoming Pick",
+                min_value=1,
+                max_value=1000,
+                value=None,
+                step=1,
+                help="Enter your upcoming draft pick number to see a vertical line on the chart"
+            )
+        
+        # Check if we have the required columns for the chart
+        required_cols = ['name', 'pos', 'adp', 'min_pick', 'max_pick']
+        missing_cols = [col for col in required_cols if col not in filtered_df.columns]
+        
+        if missing_cols:
+            st.error(f"Missing required columns for chart: {', '.join(missing_cols)}")
+        else:
+            # Prepare data for chart - only include players with valid ADP data
+            chart_df = filtered_df[
+                filtered_df['adp'].notna() & 
+                filtered_df['min_pick'].notna() & 
+                filtered_df['max_pick'].notna()
+            ].copy()
+            
+            if len(chart_df) == 0:
+                st.warning("No players with ADP data available to display in chart.")
+            else:
+                # Sort by rank for better visualization
+                if 'rank' in chart_df.columns:
+                    chart_df = chart_df.sort_values('rank', ascending=True)
+                else:
+                    # Fallback to ADP if rank not available
+                    chart_df = chart_df.sort_values('adp', ascending=True)
+                
+                # Create player labels with name and position
+                chart_df['player_label'] = chart_df.apply(
+                    lambda row: f"{row['name']} ({row['pos']})", axis=1
+                )
+                
+                # Create the chart using plotly
+                fig = go.Figure()
+                
+                # Add horizontal lines (whiskers) for min and max picks with ADP marker
+                for idx, row in chart_df.iterrows():
+                    player_label = row['player_label']
+                    adp = row['adp']
+                    min_pick = row['min_pick']
+                    max_pick = row['max_pick']
+                    
+                    # Add line from min to max (whisker/range line)
+                    fig.add_trace(go.Scatter(
+                        x=[min_pick, max_pick],
+                        y=[player_label, player_label],
+                        mode='lines',
+                        line=dict(color='lightblue', width=3),
+                        showlegend=False,
+                        hoverinfo='skip'
+                    ))
+                    
+                    # Add marker for ADP (center point) - larger and more prominent
+                    # Get rank if available
+                    rank_text = ""
+                    if 'rank' in row:
+                        rank_value = row['rank']
+                        if pd.notna(rank_value):
+                            rank_text = f"Rank: {int(rank_value)}<br>"
+                    
+                    fig.add_trace(go.Scatter(
+                        x=[adp],
+                        y=[player_label],
+                        mode='markers',
+                        marker=dict(
+                            size=10,
+                            color='darkblue',
+                            symbol='circle',
+                            line=dict(color='white', width=1)
+                        ),
+                        name=player_label,
+                        hovertemplate=f"<b>{player_label}</b><br>" +
+                                     rank_text +
+                                     f"ADP: {adp:.1f}<br>" +
+                                     f"Min Pick: {min_pick:.0f}<br>" +
+                                     f"Max Pick: {max_pick:.0f}<br>" +
+                                     f"Range: {max_pick - min_pick:.0f} picks<extra></extra>",
+                        showlegend=False
+                    ))
+                
+                # Add vertical line for upcoming draft pick if specified
+                if upcoming_pick is not None and pd.notna(upcoming_pick):
+                    # Get the y-axis range from the player labels
+                    y_values = chart_df['player_label'].tolist()
+                    fig.add_vline(
+                        x=upcoming_pick,
+                        line_dash="dash",
+                        line_color="red",
+                        line_width=2,
+                        annotation_text=f"Pick {int(upcoming_pick)}",
+                        annotation_position="top",
+                        annotation=dict(font_size=12, font_color="red")
+                    )
+                
+                # Calculate height based on number of players - ensure readable spacing
+                # Use enough height per player so names are visible
+                chart_height = max(400, len(chart_df) * 25)  # 25px per player for readability
+                
+                # Update layout - balance between readability and spacing
+                fig.update_layout(
+                    title="ADP Chart (Min Pick - ADP - Max Pick)",
+                    xaxis_title="Pick Number",
+                    yaxis_title="Player (Position)",
+                    height=chart_height,
+                    hovermode='closest',
+                    margin=dict(l=150, r=50, t=10, b=10),  # Minimal top/bottom margins
+                    xaxis=dict(
+                        autorange=True,
+                        showgrid=True,
+                        gridwidth=1,
+                        gridcolor='black',
+                        title_font=dict(color='black', size=12),  # Dark, readable axis title
+                        tickfont=dict(color='black', size=11)  # Dark, readable tick labels
+                    ),
+                    yaxis=dict(
+                        autorange="reversed",
+                        showgrid=False,
+                        tickfont=dict(color='black', size=11),  # Dark, readable font
+                        title_font=dict(color='black', size=12),  # Dark, readable axis title
+                        # Reduce padding at top and bottom
+                        range=[-0.5, len(chart_df) - 0.5]  # Tight range around data points
+                    ),
+                    font=dict(size=11, color='black'),  # Dark, readable font
+                    paper_bgcolor='white',
+                    plot_bgcolor='white'
+                )
+                
+                # Display the chart
+                st.plotly_chart(
+                    fig, 
+                    use_container_width=True,
+                    config={
+                        'displayModeBar': True,
+                        'displaylogo': False,
+                        'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+                        'scrollZoom': True,  # Enable scroll zoom for mobile
+                        'responsive': True   # Make chart responsive
+                    }
+                )
