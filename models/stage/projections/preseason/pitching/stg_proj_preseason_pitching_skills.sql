@@ -22,5 +22,5 @@ select id,
     avg(k_per_9) as k_per_9,
     avg(bb_per_9) as bb_per_9
 from {{ ref('stg_fg_proj_preseason_pitching_per_ip') }}
-where proj_system in ('steamer','thebat','oopsy')
+where proj_system in ('steamer','atc','thebat','oopsy')
 group by id
