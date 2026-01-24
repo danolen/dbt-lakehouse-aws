@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 import boto3
 from botocore.exceptions import ClientError
 import plotly.graph_objects as go
+import numpy as np
 
 # Load environment variables from .env file (if it exists)
 # This makes it easy to set config without hardcoding values
@@ -226,6 +227,21 @@ if selected_session_option == "➕ Create New Session...":
 else:
     # Use the selected existing session
     draft_session_id = selected_session_option
+
+# Draft type selection (Mock vs Live)
+draft_type_key = f"draft_type_{draft_session_id}"
+if draft_type_key not in st.session_state:
+    st.session_state[draft_type_key] = "Mock Draft"
+
+draft_type = st.radio(
+    "Draft Type",
+    ["Mock Draft", "Live Draft"],
+    index=0 if st.session_state[draft_type_key] == "Mock Draft" else 1,
+    horizontal=True,
+    key=draft_type_key,
+    help="Mock Draft: Enable simulation features. Live Draft: Track actual draft picks only."
+)
+# Note: st.radio with key automatically updates session_state, so we don't need to set it manually
 
 # Format selection
 format_type = st.selectbox("Select Format", ["50s", "OC"])
@@ -457,9 +473,340 @@ if st.session_state[cache_key] is not None:
         total_my_team = df['My Team'].sum() if 'My Team' in df.columns else 0
         st.info(f"📊 **Draft Summary:** {total_drafted} players drafted ({total_my_team} on my team) out of {len(df)} total players")
     
+    # Get draft type (needed for both mock draft section and manual drafting)
+    draft_type_key = f"draft_type_{draft_session_id}"
+    current_draft_type = st.session_state.get(draft_type_key, "Mock Draft")
+    
     # Render different pages based on selection
     if page == "📊 Draft Table":
         # DRAFT TABLE PAGE
+        
+        # MOCK DRAFT SIMULATION (only show if Mock Draft type)
+        
+        if current_draft_type == "Mock Draft":
+            st.markdown("---")
+            st.subheader("Mock Draft Simulation")
+            
+            # Initialize current pick in session state
+            pick_key = f"current_pick_{draft_session_id}_{format_type}"
+            last_picked_key = f"last_picked_{draft_session_id}_{format_type}"
+            
+            if pick_key not in st.session_state:
+                st.session_state[pick_key] = 1
+            if last_picked_key not in st.session_state:
+                st.session_state[last_picked_key] = None
+            
+            current_pick = st.session_state[pick_key]
+            last_picked = st.session_state[last_picked_key]
+            
+            # Show current pick and last picked player
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Current Pick", current_pick)
+            with col2:
+                if last_picked:
+                    st.info(f"Last Picked: **{last_picked}**")
+                else:
+                    st.info("No picks yet")
+            with col3:
+                if st.button("🔄 Reset Mock Draft", help="Reset pick counter and clear all drafted players"):
+                    # Clear all drafted players from DynamoDB
+                    try:
+                        drafted_ids = get_drafted_players(draft_table)
+                        for player_id in drafted_ids:
+                            mark_player_undrafted(draft_table, player_id)
+                        st.session_state[pick_key] = 1
+                        st.session_state[last_picked_key] = None
+                        st.success("Mock draft reset! All players cleared.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error resetting draft: {str(e)}")
+        
+        # Simulate next pick button (only show for Mock Draft)
+        if current_draft_type == "Mock Draft":
+            if st.button("🎲 Simulate Next Pick", type="primary", use_container_width=True):
+                # Get undrafted players (exclude players on "My Team")
+                undrafted_df = filtered_df[
+                    (filtered_df.get('Drafted', False) == False) & 
+                    (filtered_df.get('My Team', False) == False)
+                ].copy()
+                
+                # Filter to players with ADP data
+                if 'adp' in undrafted_df.columns and 'min_pick' in undrafted_df.columns and 'max_pick' in undrafted_df.columns:
+                    players_with_adp = undrafted_df[
+                        undrafted_df['adp'].notna() & 
+                        undrafted_df['min_pick'].notna() & 
+                        undrafted_df['max_pick'].notna()
+                    ].copy()
+                    
+                    if len(players_with_adp) > 0:
+                        # Calculate draft probabilities
+                        # Use normal distribution centered on ADP, with variance based on range
+                        # Allow ~15% probability outside min/max range (reaches and falls happen)
+                        probabilities = []
+                        player_ids = []
+                        player_names = []
+                        
+                        for _, player in players_with_adp.iterrows():
+                            adp = player['adp']
+                            min_pick = player['min_pick']
+                            max_pick = player['max_pick']
+                            player_id = str(player['id'])
+                            player_name = player.get('name', 'Unknown')
+                            
+                            # Calculate variance based on range
+                            range_size = max_pick - min_pick
+                            std_dev = max(range_size / 3, 3)  # Minimum std_dev of 3
+                            
+                            # Base probability using normal distribution centered on ADP
+                            base_prob = np.exp(-0.5 * ((current_pick - adp) / std_dev) ** 2)
+                            
+                            # Apply range constraints and urgency factors
+                            if current_pick < min_pick:
+                                # Too early - very low probability, only if very close
+                                distance_before_min = min_pick - current_pick
+                                if distance_before_min <= 2:
+                                    prob = base_prob * 0.1  # 10% if within 2 picks
+                                else:
+                                    prob = 0.0001  # Essentially zero
+                            elif current_pick > max_pick:
+                                # Past max_pick - player is overdue, boost probability significantly
+                                distance_after_max = current_pick - max_pick
+                                # Urgency factor: the further past max, the higher the urgency
+                                urgency_factor = 1 + (distance_after_max * 2)  # Exponential urgency
+                                prob = base_prob * urgency_factor * 10  # Strong boost for overdue players
+                            elif current_pick >= max_pick - 2:
+                                # Approaching max_pick (within 2 picks) - increase urgency
+                                distance_to_max = max_pick - current_pick
+                                urgency_factor = 1 + (2 - distance_to_max) * 0.5  # Increasing urgency
+                                prob = base_prob * urgency_factor
+                            else:
+                                # Within normal range - use base probability
+                                prob = base_prob
+                            
+                            probabilities.append(prob)
+                            player_ids.append(player_id)
+                            player_names.append(player_name)
+                        
+                        # Normalize probabilities
+                        total_prob = sum(probabilities)
+                        if total_prob > 0:
+                            probabilities = [p / total_prob for p in probabilities]
+                            
+                            # Select player using weighted random choice
+                            selected_idx = np.random.choice(len(player_ids), p=probabilities)
+                            selected_player_id = player_ids[selected_idx]
+                            selected_player_name = player_names[selected_idx]
+                            
+                            # Mark player as drafted
+                            if mark_player_drafted(draft_table, selected_player_id, selected_player_name):
+                                # Update session state
+                                st.session_state[pick_key] = current_pick + 1
+                                st.session_state[last_picked_key] = selected_player_name
+                                st.success(f"✅ Pick {current_pick}: **{selected_player_name}** has been drafted!")
+                                st.rerun()
+                        else:
+                            st.warning("Could not calculate probabilities. All players may be outside their draft range.")
+                    else:
+                        # No players with ADP data - select randomly from remaining
+                        if len(undrafted_df) > 0:
+                            selected_player = undrafted_df.sample(n=1).iloc[0]
+                            selected_player_id = str(selected_player['id'])
+                            selected_player_name = selected_player.get('name', 'Unknown')
+                            
+                            if mark_player_drafted(draft_table, selected_player_id, selected_player_name):
+                                st.session_state[pick_key] = current_pick + 1
+                                st.session_state[last_picked_key] = selected_player_name
+                                st.success(f"✅ Pick {current_pick}: **{selected_player_name}** has been drafted!")
+                                st.rerun()
+                        else:
+                            st.warning("No undrafted players available!")
+                else:
+                    st.warning("ADP data not available for mock draft simulation.")
+        
+        # Show current pick and last picked for live drafts too
+        if current_draft_type == "Live Draft":
+            st.markdown("---")
+            st.subheader("Draft Status")
+            
+            # Initialize current pick in session state (for tracking)
+            pick_key = f"current_pick_{draft_session_id}_{format_type}"
+            last_picked_key = f"last_picked_{draft_session_id}_{format_type}"
+            
+            if pick_key not in st.session_state:
+                st.session_state[pick_key] = 1
+            if last_picked_key not in st.session_state:
+                st.session_state[last_picked_key] = None
+            
+            current_pick = st.session_state[pick_key]
+            last_picked = st.session_state[last_picked_key]
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Current Pick", current_pick)
+            with col2:
+                if last_picked:
+                    st.info(f"Last Picked: **{last_picked}**")
+                else:
+                    st.info("No picks yet")
+        
+        st.markdown("---")
+        
+        # TEAM STATS COMPARISON CHART
+        # Get players on my team
+        my_team_df = filtered_df[filtered_df.get('My Team', False) == True].copy() if 'My Team' in filtered_df.columns else pd.DataFrame()
+        
+        if len(my_team_df) > 0:
+            st.subheader("My Team Stats vs Percentiles")
+            
+            try:
+                # Query percentiles table to get the right format and max year
+                conn = connect(
+                    s3_staging_dir=ATHENA_S3_OUTPUT,
+                    region_name=ATHENA_REGION,
+                    schema_name=ATHENA_SCHEMA,
+                    cursor_class=PandasCursor
+                )
+                
+                # Get percentiles for the selected format and max year
+                percentiles_query = f"""
+                WITH filename_parts AS (
+                    SELECT 
+                        _filename,
+                        category,
+                        p80,
+                        p90,
+                        -- Extract format (after first space) and year (after second space)
+                        split_part(_filename, ' ', 2) as format_part,
+                        cast(split_part(_filename, ' ', 3) as int) as year_part
+                    FROM {ATHENA_SCHEMA}.mart_sgp_percentiles
+                )
+                SELECT 
+                    category,
+                    p80,
+                    p90
+                FROM filename_parts
+                WHERE format_part = '{format_type}'
+                AND year_part = (SELECT max(year_part) FROM filename_parts WHERE format_part = '{format_type}')
+                """
+                
+                cursor = conn.cursor()
+                percentiles_df = cursor.execute(percentiles_query).as_pandas()
+                
+                if len(percentiles_df) > 0:
+                    # Aggregate my team stats
+                    # Map category names from percentiles to player stats columns
+                    category_mapping = {
+                        'R': 'r',
+                        'HR': 'hr',
+                        'RBI': 'rbi',
+                        'SB': 'sb',
+                        'AVG': 'avg',
+                        'K': 'k',
+                        'W': 'w',
+                        'S': 'sv',  # Saves: S in percentiles, sv in rankings
+                        'ERA': 'era',
+                        'WHIP': 'whip'
+                    }
+                    
+                    # Calculate aggregated team stats
+                    team_stats = {}
+                    for percentile_cat, stat_col in category_mapping.items():
+                        if stat_col in my_team_df.columns:
+                            if stat_col == 'avg':
+                                # AVG = H / AB - need to aggregate properly
+                                if 'ab' in my_team_df.columns:
+                                    # Calculate total hits from avg and ab, then recalculate
+                                    total_h = (my_team_df['ab'].fillna(0) * my_team_df['avg'].fillna(0)).sum()
+                                    total_ab = my_team_df['ab'].fillna(0).sum()
+                                    team_stats[percentile_cat] = total_h / total_ab if total_ab > 0 else 0
+                                else:
+                                    # Fallback to simple average if AB not available
+                                    team_stats[percentile_cat] = my_team_df[stat_col].mean() if len(my_team_df) > 0 else 0
+                            elif stat_col in ['era', 'whip']:
+                                # For ERA and WHIP, aggregate as weighted average by IP
+                                if 'ip' in my_team_df.columns:
+                                    total_ip = my_team_df['ip'].fillna(0).sum()
+                                    if total_ip > 0:
+                                        # Weighted average: sum(stat * ip) / sum(ip)
+                                        weighted_sum = (my_team_df[stat_col].fillna(0) * my_team_df['ip'].fillna(0)).sum()
+                                        team_stats[percentile_cat] = weighted_sum / total_ip
+                                    else:
+                                        team_stats[percentile_cat] = my_team_df[stat_col].mean() if len(my_team_df) > 0 else 0
+                                else:
+                                    # Fallback to simple average if IP not available
+                                    team_stats[percentile_cat] = my_team_df[stat_col].mean() if len(my_team_df) > 0 else 0
+                            else:
+                                # Counting stats (R, HR, RBI, SB, K, W, sv) - sum them
+                                team_stats[percentile_cat] = my_team_df[stat_col].fillna(0).sum()
+                    
+                    # Define category order
+                    category_order = ['R', 'HR', 'RBI', 'SB', 'AVG', 'K', 'W', 'SV', 'ERA', 'WHIP']
+                    
+                    # Create comparison chart data in the specified order
+                    categories = []
+                    team_values = []
+                    p80_values = []
+                    p90_values = []
+                    
+                    # Create a mapping from percentile category to display name
+                    category_display_map = {'S': 'SV'}  # Map S to SV for display
+                    
+                    # Build data in the specified order
+                    for cat in category_order:
+                        # Check if this category exists in percentiles (handle S -> SV mapping)
+                        percentile_cat = 'S' if cat == 'SV' else cat
+                        if percentile_cat in team_stats:
+                            # Use display name (SV instead of S)
+                            categories.append(cat)
+                            team_values.append(team_stats[percentile_cat])
+                            
+                            # Get percentile values
+                            percentile_row = percentiles_df[percentiles_df['category'] == percentile_cat]
+                            if len(percentile_row) > 0:
+                                p80_values.append(percentile_row.iloc[0]['p80'])
+                                p90_values.append(percentile_row.iloc[0]['p90'])
+                            else:
+                                p80_values.append(0)
+                                p90_values.append(0)
+                    
+                    if len(categories) > 0:
+                        # Create comparison table
+                        comparison_data = []
+                        for cat, team_val, p80_val, p90_val in zip(categories, team_values, p80_values, p90_values):
+                            # Format values based on category type
+                            if cat == 'AVG':
+                                team_str = f'{team_val:.3f}'
+                                p80_str = f'{p80_val:.3f}'
+                                p90_str = f'{p90_val:.3f}'
+                            elif cat in ['ERA', 'WHIP']:
+                                team_str = f'{team_val:.2f}'
+                                p80_str = f'{p80_val:.2f}'
+                                p90_str = f'{p90_val:.2f}'
+                            else:
+                                team_str = f'{int(team_val)}'
+                                p80_str = f'{int(p80_val)}'
+                                p90_str = f'{int(p90_val)}'
+                            
+                            comparison_data.append({
+                                'Category': cat,
+                                'My Team': team_str,
+                                '80th Percentile': p80_str,
+                                '90th Percentile': p90_str
+                            })
+                        
+                        comparison_df = pd.DataFrame(comparison_data)
+                        st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No matching categories found between team stats and percentiles.")
+                else:
+                    st.info("No percentile data found for the selected format.")
+                    
+            except Exception as e:
+                st.warning(f"Error loading percentile data: {str(e)}")
+        else:
+            st.info("Add players to 'My Team' to see stats comparison.")
+        
         st.markdown("---")
         st.subheader(f"Results: {len(filtered_df)} players")
         
@@ -549,6 +896,8 @@ if st.session_state[cache_key] is not None:
             
             # Check each row in edited dataframe
             changes_made = False
+            newly_drafted_players = []  # Track newly drafted players for "Last Picked" display
+            
             for _, row in edited_df.iterrows():
                 player_id = str(row['id'])
                 player_name = row.get('name', 'Unknown')
@@ -568,20 +917,49 @@ if st.session_state[cache_key] is not None:
                         # If marking as my team, ensure drafted is also true
                         if new_my_team and not new_drafted:
                             mark_player_drafted(draft_table, player_id, player_name)
+                            # Track if this is a newly drafted player
+                            if not original_drafted_status:
+                                newly_drafted_players.append(player_name)
                 
-                # Priority 2: Handle "Drafted" changes (only if my team didn't change in this edit)
+                # Priority 2: Handle "Drafted" changes
                 # If unchecked, also uncheck my team (can't be on my team if not drafted)
                 if 'Drafted' in edited_df.columns:
                     if new_drafted != original_drafted_status:
                         if new_drafted:
                             mark_player_drafted(draft_table, player_id, player_name)
+                            # Track if this is a newly drafted player
+                            if not original_drafted_status:
+                                newly_drafted_players.append(player_name)
                         else:
                             # If unchecking drafted, delete from DynamoDB (which removes both drafted and my team status)
                             mark_player_undrafted(draft_table, player_id)
                         changes_made = True
             
+            # Update pick counter based on total drafted players (for both mock and live drafts)
+            if changes_made:
+                pick_key = f"current_pick_{draft_session_id}_{format_type}"
+                last_picked_key = f"last_picked_{draft_session_id}_{format_type}"
+                
+                # Initialize pick counter if it doesn't exist
+                if pick_key not in st.session_state:
+                    st.session_state[pick_key] = 1
+                if last_picked_key not in st.session_state:
+                    st.session_state[last_picked_key] = None
+                
+                # Calculate pick counter based on total drafted players + 1
+                # This ensures accuracy even if players are unchecked
+                # We query DynamoDB to get the current count (this is necessary)
+                total_drafted_count = len(get_drafted_players(draft_table))
+                st.session_state[pick_key] = total_drafted_count + 1
+                
+                # Update last picked player (only if someone was just drafted)
+                if newly_drafted_players:
+                    st.session_state[last_picked_key] = newly_drafted_players[-1]
+                # If someone was undrafted, we leave last_picked as is (we don't track draft order)
+            
             # Only rerun if changes were actually made
             if changes_made:
+                # Force refresh of drafted status by clearing cache or rerunning
                 st.rerun()  # Refresh to show updated status
     
     elif page == "📈 ADP Chart":
