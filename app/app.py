@@ -269,10 +269,18 @@ with col1:
 with col2:
     refresh_button = st.button("🔄 Refresh Data")
 
-# If refresh button clicked, clear the cache
+# If refresh button clicked, clear the cache and recalculate pick counter
 if refresh_button:
     st.session_state[cache_key] = None
     st.session_state[timestamp_key] = None
+    # Recalculate pick counter from DynamoDB to sync with other devices
+    try:
+        draft_table = get_dynamodb_table(DYNAMODB_TABLE_NAME, DYNAMODB_REGION)
+        total_drafted_count = len(get_drafted_players(draft_table))
+        pick_key = f"current_pick_{draft_session_id}_{format_type}"
+        st.session_state[pick_key] = total_drafted_count + 1
+    except Exception as e:
+        pass  # Silently fail if DynamoDB isn't available
     st.info("Cache cleared! Click 'Load Player Rankings' to fetch fresh data.")
 
 # Load data if button clicked OR if we don't have cached data yet
@@ -393,6 +401,12 @@ def render_filters_and_apply(df, draft_table):
     # DRAFT STATUS - Get drafted players from DynamoDB
     drafted_player_ids = get_drafted_players(draft_table)
     my_team_player_ids = get_my_team_players(draft_table)
+    
+    # Recalculate pick counter from DynamoDB to sync with other devices
+    # This ensures the counter is always accurate, even if changes were made on another device
+    pick_key = f"current_pick_{draft_session_id}_{format_type}"
+    total_drafted_count = len(drafted_player_ids)
+    st.session_state[pick_key] = total_drafted_count + 1
     
     # Add drafted status columns to dataframe
     if 'id' in df.columns:
@@ -967,9 +981,25 @@ if st.session_state[cache_key] is not None:
         st.markdown("---")
         st.subheader(f"ADP Chart: {len(filtered_df)} players")
         
-        # Input for upcoming draft pick
-        col1, col2 = st.columns([1, 4])
+        # Filter for number of players to show (ADP chart only)
+        max_players_key = f"adp_chart_max_players_{format_type}"
+        if max_players_key not in st.session_state:
+            st.session_state[max_players_key] = 50
+        
+        col1, col2 = st.columns([1, 1])
         with col1:
+            max_players = st.number_input(
+                "Number of Players to Show",
+                min_value=10,
+                max_value=1000,
+                value=st.session_state[max_players_key],
+                step=10,
+                help="Limit the chart to show only the top N players by rank",
+                key=max_players_key
+            )
+            # Note: st.number_input with key automatically updates session_state, so we don't need to set it manually
+        
+        with col2:
             upcoming_pick = st.number_input(
                 "My Upcoming Pick",
                 min_value=1,
@@ -1002,6 +1032,9 @@ if st.session_state[cache_key] is not None:
                 else:
                     # Fallback to ADP if rank not available
                     chart_df = chart_df.sort_values('adp', ascending=True)
+                
+                # Limit to top N players based on filter
+                chart_df = chart_df.head(max_players)
                 
                 # Create player labels with name and position
                 chart_df['player_label'] = chart_df.apply(
@@ -1111,7 +1144,7 @@ if st.session_state[cache_key] is not None:
                         'displayModeBar': True,
                         'displaylogo': False,
                         'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
-                        'scrollZoom': True,  # Enable scroll zoom for mobile
+                        'scrollZoom': False,  # Enable scroll zoom for mobile
                         'responsive': True   # Make chart responsive
                     }
                 )
