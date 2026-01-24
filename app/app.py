@@ -19,6 +19,7 @@ import numpy as np
 
 # Load environment variables from .env file (if it exists)
 # This makes it easy to set config without hardcoding values
+# Note: On Streamlit Cloud, use st.secrets instead (see deployment docs)
 load_dotenv()
 
 # Page configuration
@@ -41,16 +42,45 @@ page = st.radio(
 )
 st.markdown("---")
 
-# Configuration - read from environment variables, with defaults as fallback
-# You can set these in a .env file or as environment variables
-ATHENA_DATABASE = os.getenv("ATHENA_DATABASE", "AwsDataCatalog")
-ATHENA_SCHEMA = os.getenv("ATHENA_SCHEMA", "dbt_main")
-ATHENA_REGION = os.getenv("ATHENA_REGION", "us-east-1")
-ATHENA_S3_OUTPUT = os.getenv("ATHENA_S3_OUTPUT", "s3://dn-lakehouse-dev/logs/athena-results/")
+# Configuration - supports both Streamlit Secrets (for cloud) and .env files (for local)
+# Priority: st.secrets > environment variables > .env file > defaults
+def get_config(key, default=None):
+    """Get configuration value from Streamlit secrets, env vars, or default"""
+    # First try Streamlit secrets (for Streamlit Cloud)
+    try:
+        if hasattr(st.secrets, key.lower()):
+            return st.secrets[key.lower()]
+        # Also try accessing as dict (alternative secrets format)
+        if key.lower() in st.secrets:
+            return st.secrets[key.lower()]
+    except (AttributeError, KeyError):
+        pass
+    
+    # Fall back to environment variables or .env file
+    return os.getenv(key, default)
+
+ATHENA_DATABASE = get_config("ATHENA_DATABASE", "AwsDataCatalog")
+ATHENA_SCHEMA = get_config("ATHENA_SCHEMA", "dbt_main")
+ATHENA_REGION = get_config("ATHENA_REGION", "us-east-1")
+ATHENA_S3_OUTPUT = get_config("ATHENA_S3_OUTPUT")  # Required - no default
 
 # DynamoDB configuration for draft tracking
-DYNAMODB_REGION = os.getenv("DYNAMODB_REGION", ATHENA_REGION)
-DYNAMODB_TABLE_NAME = os.getenv("DYNAMODB_TABLE_NAME", "fantasy_baseball_draft")
+DYNAMODB_REGION = get_config("DYNAMODB_REGION", ATHENA_REGION)
+DYNAMODB_TABLE_NAME = get_config("DYNAMODB_TABLE_NAME", "fantasy_baseball_draft")
+
+# Validate required configuration
+if not ATHENA_S3_OUTPUT:
+    st.error("""
+    **Configuration Error:** `ATHENA_S3_OUTPUT` is required but not set.
+    
+    **For Local Development:**
+    - Create a `.env` file with: `ATHENA_S3_OUTPUT=s3://your-bucket/query-results/`
+    - Or set it as an environment variable
+    
+    **For Streamlit Cloud:**
+    - Add it to your Streamlit Secrets (see DEPLOYMENT.md)
+    """)
+    st.stop()
 
 # SIMPLE DYNAMODB FUNCTIONS FOR DRAFT TRACKING
 def get_dynamodb_table(table_name, region):
@@ -667,8 +697,8 @@ if st.session_state[cache_key] is not None:
         st.markdown("---")
         
         # TEAM STATS COMPARISON CHART
-        # Get players on my team
-        my_team_df = filtered_df[filtered_df.get('My Team', False) == True].copy() if 'My Team' in filtered_df.columns else pd.DataFrame()
+        # Get players on my team (use full dataset, not filtered - team stats should always show regardless of filters)
+        my_team_df = df[df.get('My Team', False) == True].copy() if 'My Team' in df.columns else pd.DataFrame()
         
         if len(my_team_df) > 0:
             st.subheader("My Team Stats vs Percentiles")
@@ -785,8 +815,12 @@ if st.session_state[cache_key] is not None:
                                 p90_values.append(0)
                     
                     if len(categories) > 0:
-                        # Create comparison table
-                        comparison_data = []
+                        # Create transposed comparison table (categories as columns, percentiles as rows)
+                        # Initialize data structure for transposed table
+                        p80_row = {}
+                        p90_row = {}
+                        team_row = {}
+                        
                         for cat, team_val, p80_val, p90_val in zip(categories, team_values, p80_values, p90_values):
                             # Format values based on category type
                             if cat == 'AVG':
@@ -802,15 +836,40 @@ if st.session_state[cache_key] is not None:
                                 p80_str = f'{int(p80_val)}'
                                 p90_str = f'{int(p90_val)}'
                             
-                            comparison_data.append({
-                                'Category': cat,
-                                'My Team': team_str,
-                                '80th Percentile': p80_str,
-                                '90th Percentile': p90_str
-                            })
+                            # Add to each row
+                            p80_row[cat] = p80_str
+                            p90_row[cat] = p90_str
+                            team_row[cat] = team_str
+                        
+                        # Create transposed dataframe with categories as columns
+                        comparison_data = [
+                            {'Metric': '80th Percentile', **p80_row},
+                            {'Metric': '90th Percentile', **p90_row},
+                            {'Metric': 'My Team', **team_row}
+                        ]
                         
                         comparison_df = pd.DataFrame(comparison_data)
-                        st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+                        
+                        # Configure column widths to make them narrower
+                        column_config = {
+                            'Metric': st.column_config.TextColumn(
+                                'Metric',
+                                width='medium'
+                            )
+                        }
+                        # Make all stat columns narrower
+                        for cat in categories:
+                            column_config[cat] = st.column_config.TextColumn(
+                                cat,
+                                width='small'
+                            )
+                        
+                        st.dataframe(
+                            comparison_df, 
+                            use_container_width=True, 
+                            hide_index=True,
+                            column_config=column_config
+                        )
                     else:
                         st.info("No matching categories found between team stats and percentiles.")
                 else:
@@ -983,8 +1042,6 @@ if st.session_state[cache_key] is not None:
         
         # Filter for number of players to show (ADP chart only)
         max_players_key = f"adp_chart_max_players_{format_type}"
-        if max_players_key not in st.session_state:
-            st.session_state[max_players_key] = 50
         
         col1, col2 = st.columns([1, 1])
         with col1:
@@ -992,7 +1049,7 @@ if st.session_state[cache_key] is not None:
                 "Number of Players to Show",
                 min_value=10,
                 max_value=1000,
-                value=st.session_state[max_players_key],
+                value=50,  # Default value (session state will override if it exists)
                 step=10,
                 help="Limit the chart to show only the top N players by rank",
                 key=max_players_key

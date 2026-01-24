@@ -4,3 +4,4 @@ pandas
 pyathena
 python-dotenv
 plotly
+numpy
