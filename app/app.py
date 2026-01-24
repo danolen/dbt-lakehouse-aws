@@ -79,6 +79,21 @@ ATHENA_S3_OUTPUT = get_config("ATHENA_S3_OUTPUT")  # Required - no default
 DYNAMODB_REGION = get_config("DYNAMODB_REGION", ATHENA_REGION)
 DYNAMODB_TABLE_NAME = get_config("DYNAMODB_TABLE_NAME", "fantasy_baseball_draft")
 
+# Configure AWS credentials from Streamlit Secrets or environment variables
+# boto3/pyathena will automatically use these environment variables
+AWS_ACCESS_KEY_ID = get_config("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = get_config("AWS_SECRET_ACCESS_KEY")
+AWS_DEFAULT_REGION = get_config("AWS_DEFAULT_REGION", ATHENA_REGION)
+
+# Set AWS credentials as environment variables if they were found in secrets
+# This allows boto3 to automatically pick them up
+if AWS_ACCESS_KEY_ID and not os.getenv("AWS_ACCESS_KEY_ID"):
+    os.environ["AWS_ACCESS_KEY_ID"] = AWS_ACCESS_KEY_ID
+if AWS_SECRET_ACCESS_KEY and not os.getenv("AWS_SECRET_ACCESS_KEY"):
+    os.environ["AWS_SECRET_ACCESS_KEY"] = AWS_SECRET_ACCESS_KEY
+if AWS_DEFAULT_REGION and not os.getenv("AWS_DEFAULT_REGION"):
+    os.environ["AWS_DEFAULT_REGION"] = AWS_DEFAULT_REGION
+
 # Validate required configuration
 if not ATHENA_S3_OUTPUT:
     st.error("""

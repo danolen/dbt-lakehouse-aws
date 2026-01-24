@@ -34,26 +34,27 @@ Streamlit Cloud uses **Secrets** instead of `.env` files. You'll configure these
 
 ```toml
 [default]
+# Athena Configuration
 ATHENA_DATABASE = "AwsDataCatalog"
 ATHENA_SCHEMA = "dbt_main"
 ATHENA_REGION = "us-east-1"
 ATHENA_S3_OUTPUT = "s3://your-bucket/query-results/"
+
+# DynamoDB Configuration
 DYNAMODB_REGION = "us-east-1"
 DYNAMODB_TABLE_NAME = "fantasy_baseball_draft"
-```
 
-### AWS Credentials
-
-For AWS credentials, you have two options:
-
-**Option 1: Environment Variables (Recommended)**
-Add these to your Streamlit Secrets:
-```toml
-[default]
+# AWS Credentials (REQUIRED for Streamlit Cloud)
 AWS_ACCESS_KEY_ID = "your-access-key-id"
 AWS_SECRET_ACCESS_KEY = "your-secret-access-key"
 AWS_DEFAULT_REGION = "us-east-1"
 ```
+
+**Important:** AWS credentials are **required** for Streamlit Cloud deployment. The app needs these to connect to Athena, S3, and DynamoDB.
+
+### Alternative: IAM Role (Advanced)
+
+If you're running on AWS infrastructure, you can use IAM roles instead of access keys, but this is not available on Streamlit Cloud.
 
 **Option 2: IAM Role (Advanced)**
 If you're running on AWS infrastructure, you can use IAM roles instead of access keys.
