@@ -48,12 +48,23 @@ def get_config(key, default=None):
     """Get configuration value from Streamlit secrets, env vars, or default"""
     # First try Streamlit secrets (for Streamlit Cloud)
     try:
-        if hasattr(st.secrets, key.lower()):
-            return st.secrets[key.lower()]
-        # Also try accessing as dict (alternative secrets format)
-        if key.lower() in st.secrets:
-            return st.secrets[key.lower()]
-    except (AttributeError, KeyError):
+        # Method 1: Try accessing through 'default' section (most common in Streamlit Cloud)
+        # Secrets are typically structured as: [default] ATHENA_S3_OUTPUT = "value"
+        if "default" in st.secrets:
+            if key in st.secrets["default"]:
+                return st.secrets["default"][key]
+            # Try as attribute access
+            if hasattr(st.secrets["default"], key):
+                return getattr(st.secrets["default"], key)
+        
+        # Method 2: Try accessing directly at top level
+        # Some users might put secrets at top level without [default] section
+        if key in st.secrets:
+            return st.secrets[key]
+        if hasattr(st.secrets, key):
+            return getattr(st.secrets, key)
+            
+    except (AttributeError, KeyError, TypeError):
         pass
     
     # Fall back to environment variables or .env file
@@ -78,7 +89,14 @@ if not ATHENA_S3_OUTPUT:
     - Or set it as an environment variable
     
     **For Streamlit Cloud:**
-    - Add it to your Streamlit Secrets (see DEPLOYMENT.md)
+    - Go to your app settings → Secrets
+    - Add `ATHENA_S3_OUTPUT` in the `[default]` section:
+      ```toml
+      [default]
+      ATHENA_S3_OUTPUT = "s3://your-bucket/query-results/"
+      ```
+    - Make sure to use quotes around the S3 path
+    - See DEPLOYMENT.md for full instructions
     """)
     st.stop()
 
