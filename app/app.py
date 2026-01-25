@@ -335,12 +335,12 @@ else:
 # Draft type selection (Mock vs Live)
 draft_type_key = f"draft_type_{draft_session_id}"
 if draft_type_key not in st.session_state:
-    st.session_state[draft_type_key] = "Mock Draft"
+    st.session_state[draft_type_key] = "Live Draft"
 
 draft_type = st.radio(
     "Draft Type",
     ["Mock Draft", "Live Draft"],
-    index=0 if st.session_state[draft_type_key] == "Mock Draft" else 1,
+    index=1 if st.session_state[draft_type_key] == "Live Draft" else 0,
     horizontal=True,
     key=draft_type_key,
     help="Mock Draft: Enable simulation features. Live Draft: Track actual draft picks only."
@@ -367,11 +367,8 @@ if cache_key not in st.session_state:
     st.session_state[timestamp_key] = None
 
 # Button to refresh/load data
-col1, col2 = st.columns(2)
-with col1:
-    load_button = st.button("Load Player Rankings")
-with col2:
-    refresh_button = st.button("🔄 Refresh Data")
+# Refresh button to clear cache and reload data
+refresh_button = st.button("🔄 Refresh Data", help="Clear cached data and reload from Athena")
 
 # If refresh button clicked, clear the cache and recalculate pick counter
 if refresh_button:
@@ -386,10 +383,10 @@ if refresh_button:
         st.session_state[pick_key] = total_drafted_count + 1
     except Exception as e:
         pass  # Silently fail if DynamoDB isn't available
-    st.info("Cache cleared! Click 'Load Player Rankings' to fetch fresh data.")
+    st.info("Cache cleared! Data will reload automatically.")
 
-# Load data if button clicked OR if we don't have cached data yet
-if load_button or st.session_state[cache_key] is None:
+# Load data automatically if we don't have cached data yet
+if st.session_state[cache_key] is None:
     with st.spinner("Loading data from Athena..."):
         try:
             # Connect to Athena
@@ -597,7 +594,7 @@ if st.session_state[cache_key] is not None:
     
     # Get draft type (needed for both mock draft section and manual drafting)
     draft_type_key = f"draft_type_{draft_session_id}"
-    current_draft_type = st.session_state.get(draft_type_key, "Mock Draft")
+    current_draft_type = st.session_state.get(draft_type_key, "Live Draft")
     
     # Render different pages based on selection
     if page == "📊 Draft Table":
