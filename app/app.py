@@ -334,13 +334,18 @@ else:
 
 # Draft type selection (Mock vs Live)
 draft_type_key = f"draft_type_{draft_session_id}"
+# Initialize default value only if not already set (widget with key manages its own state)
 if draft_type_key not in st.session_state:
     st.session_state[draft_type_key] = "Live Draft"
+
+# Determine index based on current session state value
+current_draft_type = st.session_state.get(draft_type_key, "Live Draft")
+draft_type_index = 1 if current_draft_type == "Live Draft" else 0
 
 draft_type = st.radio(
     "Draft Type",
     ["Mock Draft", "Live Draft"],
-    index=1 if st.session_state[draft_type_key] == "Live Draft" else 0,
+    index=draft_type_index,
     horizontal=True,
     key=draft_type_key,
     help="Mock Draft: Enable simulation features. Live Draft: Track actual draft picks only."
@@ -453,14 +458,21 @@ def render_filters_and_apply(df, draft_table, draft_session_id):
                     for p in positions:
                         all_positions.add(p.strip())
             positions_list = sorted(list(all_positions))
+            # Widget with key automatically manages its own session state
+            # Read from widget's session state, with fallback to our stored value
+            widget_key = f"filter_pos_{format_type}"
+            if widget_key not in st.session_state:
+                st.session_state[widget_key] = st.session_state[filter_key]['selected_positions']
+            
             selected_positions = st.multiselect(
                 "Position (can select multiple)", 
                 positions_list,
-                default=st.session_state[filter_key]['selected_positions'],
+                default=st.session_state[widget_key],
                 help="Select one or more positions. Shows players who have ANY of these positions.",
-                key=f"filter_pos_{format_type}"
+                key=widget_key
             )
-            st.session_state[filter_key]['selected_positions'] = selected_positions
+            # Update our filter state from widget's session state
+            st.session_state[filter_key]['selected_positions'] = st.session_state[widget_key]
         else:
             selected_positions = []
     
@@ -468,14 +480,20 @@ def render_filters_and_apply(df, draft_table, draft_session_id):
         # Filter by team (multi-select)
         if 'team' in df.columns:
             teams = sorted(df['team'].dropna().unique().tolist())
+            # Widget with key automatically manages its own session state
+            widget_key = f"filter_team_{format_type}"
+            if widget_key not in st.session_state:
+                st.session_state[widget_key] = st.session_state[filter_key]['selected_teams']
+            
             selected_teams = st.multiselect(
                 "Team (can select multiple)", 
                 teams,
-                default=st.session_state[filter_key]['selected_teams'],
+                default=st.session_state[widget_key],
                 help="Select one or more teams. Shows players from ANY of these teams.",
-                key=f"filter_team_{format_type}"
+                key=widget_key
             )
-            st.session_state[filter_key]['selected_teams'] = selected_teams
+            # Update our filter state from widget's session state
+            st.session_state[filter_key]['selected_teams'] = st.session_state[widget_key]
         else:
             selected_teams = []
     
@@ -483,25 +501,37 @@ def render_filters_and_apply(df, draft_table, draft_session_id):
         # Filter by projected opening day status (multi-select)
         if 'projected_opening_day_status' in df.columns:
             statuses = sorted(df['projected_opening_day_status'].dropna().unique().tolist())
+            # Widget with key automatically manages its own session state
+            widget_key = f"filter_status_{format_type}"
+            if widget_key not in st.session_state:
+                st.session_state[widget_key] = st.session_state[filter_key]['selected_statuses']
+            
             selected_statuses = st.multiselect(
                 "Opening Day Status (can select multiple)",
                 statuses,
-                default=st.session_state[filter_key]['selected_statuses'],
+                default=st.session_state[widget_key],
                 help="Select one or more opening day statuses. Shows players with ANY of these statuses.",
-                key=f"filter_status_{format_type}"
+                key=widget_key
             )
-            st.session_state[filter_key]['selected_statuses'] = selected_statuses
+            # Update our filter state from widget's session state
+            st.session_state[filter_key]['selected_statuses'] = st.session_state[widget_key]
         else:
             selected_statuses = []
     
     with col4:
         # Search by player name
+        # Widget with key automatically manages its own session state
+        widget_key = f"filter_search_{format_type}"
+        if widget_key not in st.session_state:
+            st.session_state[widget_key] = st.session_state[filter_key]['search_name']
+        
         search_name = st.text_input(
             "Search Player Name", 
-            value=st.session_state[filter_key]['search_name'],
-            key=f"filter_search_{format_type}"
+            value=st.session_state[widget_key],
+            key=widget_key
         )
-        st.session_state[filter_key]['search_name'] = search_name
+        # Update our filter state from widget's session state
+        st.session_state[filter_key]['search_name'] = st.session_state[widget_key]
     
     # DRAFT STATUS - Get drafted players from DynamoDB (cached)
     drafted_player_ids = get_drafted_players(draft_table, draft_session_id)
@@ -519,14 +549,28 @@ def render_filters_and_apply(df, draft_table, draft_session_id):
         df['My Team'] = df['id'].astype(str).isin(my_team_player_ids)
     
     # Filter by draft status
+    # Widget with key automatically manages its own session state
+    widget_key = f"filter_draft_{format_type}"
+    if widget_key not in st.session_state:
+        st.session_state[widget_key] = st.session_state[filter_key]['draft_filter']
+    
+    # Get index for current value
+    current_filter = st.session_state[widget_key]
+    filter_options = ["All", "Drafted Only", "Undrafted Only", "My Team Only"]
+    try:
+        current_index = filter_options.index(current_filter)
+    except ValueError:
+        current_index = 0
+    
     draft_filter = st.radio(
         "Draft Status",
-        ["All", "Drafted Only", "Undrafted Only", "My Team Only"],
-        index=["All", "Drafted Only", "Undrafted Only", "My Team Only"].index(st.session_state[filter_key]['draft_filter']),
+        filter_options,
+        index=current_index,
         horizontal=True,
-        key=f"filter_draft_{format_type}"
+        key=widget_key
     )
-    st.session_state[filter_key]['draft_filter'] = draft_filter
+    # Update our filter state from widget's session state
+    st.session_state[filter_key]['draft_filter'] = st.session_state[widget_key]
     
     # Apply filters to the dataframe
     filtered_df = df.copy()
