@@ -188,8 +188,14 @@ def mark_player_to_my_team(table, player_id, player_name=None, is_my_team=True):
         st.error(f"Error marking player to my team: {str(e)}")
         return False
 
-def get_drafted_players(table):
-    """Get set of all drafted player IDs"""
+def get_drafted_players(table, draft_session_id, force_refresh=False):
+    """Get set of all drafted player IDs (cached in session state)"""
+    cache_key = f"drafted_players_{draft_session_id}"
+    
+    # Return cached result if available and not forcing refresh
+    if not force_refresh and cache_key in st.session_state:
+        return st.session_state[cache_key]
+    
     try:
         response = table.scan()
         drafted_ids = set()
@@ -203,13 +209,21 @@ def get_drafted_players(table):
                 if item.get('drafted', False):
                     drafted_ids.add(item['player_id'])
         
+        # Cache the result
+        st.session_state[cache_key] = drafted_ids
         return drafted_ids
     except Exception as e:
         st.warning(f"Error getting drafted players: {str(e)}")
         return set()
 
-def get_my_team_players(table):
-    """Get set of all player IDs drafted to my team"""
+def get_my_team_players(table, draft_session_id, force_refresh=False):
+    """Get set of all player IDs drafted to my team (cached in session state)"""
+    cache_key = f"my_team_players_{draft_session_id}"
+    
+    # Return cached result if available and not forcing refresh
+    if not force_refresh and cache_key in st.session_state:
+        return st.session_state[cache_key]
+    
     try:
         response = table.scan()
         my_team_ids = set()
@@ -223,10 +237,37 @@ def get_my_team_players(table):
                 if item.get('drafted_to_my_team', False):
                     my_team_ids.add(item['player_id'])
         
+        # Cache the result
+        st.session_state[cache_key] = my_team_ids
         return my_team_ids
     except Exception as e:
         st.warning(f"Error getting my team players: {str(e)}")
         return set()
+
+def optimize_dataframe_memory(df):
+    """Optimize DataFrame memory usage by converting to efficient dtypes"""
+    df = df.copy()  # Work on a copy to avoid modifying original
+    
+    # Convert string columns to category (much more memory efficient)
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            # Only convert to category if it has reasonable number of unique values
+            # Categories are efficient for repeated values
+            unique_ratio = df[col].nunique() / len(df)
+            if unique_ratio < 0.5:  # If less than 50% unique values, use category
+                try:
+                    df[col] = df[col].astype('category')
+                except:
+                    pass  # Skip if conversion fails
+    
+    # Downcast numeric columns to smaller types
+    for col in df.select_dtypes(include=['int64']).columns:
+        df[col] = pd.to_numeric(df[col], downcast='integer')
+    
+    for col in df.select_dtypes(include=['float64']).columns:
+        df[col] = pd.to_numeric(df[col], downcast='float')
+    
+    return df
 
 def list_draft_sessions(region, table_name_prefix):
     """List all existing draft session tables"""
@@ -338,8 +379,9 @@ if refresh_button:
     st.session_state[timestamp_key] = None
     # Recalculate pick counter from DynamoDB to sync with other devices
     try:
-        draft_table = get_dynamodb_table(DYNAMODB_TABLE_NAME, DYNAMODB_REGION)
-        total_drafted_count = len(get_drafted_players(draft_table))
+        draft_table_name = f"{DYNAMODB_TABLE_NAME}_{draft_session_id}"
+        draft_table = get_dynamodb_table(draft_table_name, DYNAMODB_REGION)
+        total_drafted_count = len(get_drafted_players(draft_table, draft_session_id, force_refresh=True))
         pick_key = f"current_pick_{draft_session_id}_{format_type}"
         st.session_state[pick_key] = total_drafted_count + 1
     except Exception as e:
@@ -365,6 +407,9 @@ if load_button or st.session_state[cache_key] is None:
             cursor = conn.cursor()
             df = cursor.execute(query).as_pandas()
             
+            # Optimize memory usage before caching
+            df = optimize_dataframe_memory(df)
+            
             # Store in session_state (this is the caching part!)
             # Next time the page reruns, this data will still be here
             st.session_state[cache_key] = df
@@ -383,7 +428,7 @@ if load_button or st.session_state[cache_key] is None:
             """)
 
 # Helper function to render filters and return filtered dataframe
-def render_filters_and_apply(df, draft_table):
+def render_filters_and_apply(df, draft_table, draft_session_id):
     """Render filter UI and return filtered dataframe"""
     st.subheader("Filters")
     
@@ -461,9 +506,9 @@ def render_filters_and_apply(df, draft_table):
         )
         st.session_state[filter_key]['search_name'] = search_name
     
-    # DRAFT STATUS - Get drafted players from DynamoDB
-    drafted_player_ids = get_drafted_players(draft_table)
-    my_team_player_ids = get_my_team_players(draft_table)
+    # DRAFT STATUS - Get drafted players from DynamoDB (cached)
+    drafted_player_ids = get_drafted_players(draft_table, draft_session_id)
+    my_team_player_ids = get_my_team_players(draft_table, draft_session_id)
     
     # Recalculate pick counter from DynamoDB to sync with other devices
     # This ensures the counter is always accurate, even if changes were made on another device
@@ -535,7 +580,7 @@ if st.session_state[cache_key] is not None:
     draft_table = get_dynamodb_table(draft_table_name, DYNAMODB_REGION)
     
     # Render filters and get filtered dataframe
-    filtered_df, draft_table = render_filters_and_apply(df, draft_table)
+    filtered_df, draft_table = render_filters_and_apply(df, draft_table, draft_session_id)
     
     # Show summary
     st.markdown("---")
@@ -589,9 +634,14 @@ if st.session_state[cache_key] is not None:
                 if st.button("🔄 Reset Mock Draft", help="Reset pick counter and clear all drafted players"):
                     # Clear all drafted players from DynamoDB
                     try:
-                        drafted_ids = get_drafted_players(draft_table)
+                        drafted_ids = get_drafted_players(draft_table, draft_session_id, force_refresh=True)
                         for player_id in drafted_ids:
                             mark_player_undrafted(draft_table, player_id)
+                        # Clear cache after reset
+                        if f"drafted_players_{draft_session_id}" in st.session_state:
+                            del st.session_state[f"drafted_players_{draft_session_id}"]
+                        if f"my_team_players_{draft_session_id}" in st.session_state:
+                            del st.session_state[f"my_team_players_{draft_session_id}"]
                         st.session_state[pick_key] = 1
                         st.session_state[last_picked_key] = None
                         st.success("Mock draft reset! All players cleared.")
@@ -677,6 +727,10 @@ if st.session_state[cache_key] is not None:
                             
                             # Mark player as drafted
                             if mark_player_drafted(draft_table, selected_player_id, selected_player_name):
+                                # Clear DynamoDB cache since we just made a change
+                                cache_key_drafted = f"drafted_players_{draft_session_id}"
+                                if cache_key_drafted in st.session_state:
+                                    del st.session_state[cache_key_drafted]
                                 # Update session state
                                 st.session_state[pick_key] = current_pick + 1
                                 st.session_state[last_picked_key] = selected_player_name
@@ -692,6 +746,10 @@ if st.session_state[cache_key] is not None:
                             selected_player_name = selected_player.get('name', 'Unknown')
                             
                             if mark_player_drafted(draft_table, selected_player_id, selected_player_name):
+                                # Clear DynamoDB cache since we just made a change
+                                cache_key_drafted = f"drafted_players_{draft_session_id}"
+                                if cache_key_drafted in st.session_state:
+                                    del st.session_state[cache_key_drafted]
                                 st.session_state[pick_key] = current_pick + 1
                                 st.session_state[last_picked_key] = selected_player_name
                                 st.success(f"✅ Pick {current_pick}: **{selected_player_name}** has been drafted!")
@@ -1043,6 +1101,14 @@ if st.session_state[cache_key] is not None:
             
             # Update pick counter based on total drafted players (for both mock and live drafts)
             if changes_made:
+                # Clear DynamoDB cache since we just made changes
+                cache_key_drafted = f"drafted_players_{draft_session_id}"
+                cache_key_my_team = f"my_team_players_{draft_session_id}"
+                if cache_key_drafted in st.session_state:
+                    del st.session_state[cache_key_drafted]
+                if cache_key_my_team in st.session_state:
+                    del st.session_state[cache_key_my_team]
+                
                 pick_key = f"current_pick_{draft_session_id}_{format_type}"
                 last_picked_key = f"last_picked_{draft_session_id}_{format_type}"
                 
@@ -1054,8 +1120,8 @@ if st.session_state[cache_key] is not None:
                 
                 # Calculate pick counter based on total drafted players + 1
                 # This ensures accuracy even if players are unchecked
-                # We query DynamoDB to get the current count (this is necessary)
-                total_drafted_count = len(get_drafted_players(draft_table))
+                # We query DynamoDB to get the current count (force refresh to get latest)
+                total_drafted_count = len(get_drafted_players(draft_table, draft_session_id, force_refresh=True))
                 st.session_state[pick_key] = total_drafted_count + 1
                 
                 # Update last picked player (only if someone was just drafted)
