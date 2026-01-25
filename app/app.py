@@ -342,23 +342,19 @@ else:
 
 # Draft type selection (Mock vs Live)
 draft_type_key = f"draft_type_{draft_session_id}"
-# Initialize default value only if not already set (widget with key manages its own state)
-if draft_type_key not in st.session_state:
-    st.session_state[draft_type_key] = "Live Draft"
 
-# Determine index based on current session state value
-current_draft_type = st.session_state.get(draft_type_key, "Live Draft")
-draft_type_index = 1 if current_draft_type == "Live Draft" else 0
-
+# Use default index of 1 (Live Draft) - widget with key will manage session state automatically
+# Don't access st.session_state[draft_type_key] before widget creation to avoid conflicts
 draft_type = st.radio(
     "Draft Type",
     ["Mock Draft", "Live Draft"],
-    index=draft_type_index,
+    index=1,  # Default to Live Draft (index 1)
     horizontal=True,
     key=draft_type_key,
     help="Mock Draft: Enable simulation features. Live Draft: Track actual draft picks only."
 )
-# Note: st.radio with key automatically updates session_state, so we don't need to set it manually
+# Note: st.radio with key automatically updates session_state
+# The widget will remember the user's selection on subsequent runs
 
 # Format selection
 format_type = st.selectbox("Select Format", ["50s", "OC"])
