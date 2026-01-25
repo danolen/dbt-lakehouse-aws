@@ -249,12 +249,11 @@ def optimize_dataframe_memory(df):
     df = df.copy()  # Work on a copy to avoid modifying original
     
     # Convert string columns to category (much more memory efficient)
+    # Be more aggressive - convert if less than 70% unique (was 50%)
     for col in df.columns:
         if df[col].dtype == 'object':
-            # Only convert to category if it has reasonable number of unique values
-            # Categories are efficient for repeated values
-            unique_ratio = df[col].nunique() / len(df)
-            if unique_ratio < 0.5:  # If less than 50% unique values, use category
+            unique_ratio = df[col].nunique() / len(df) if len(df) > 0 else 1
+            if unique_ratio < 0.7:  # More aggressive: convert if less than 70% unique
                 try:
                     df[col] = df[col].astype('category')
                 except:
@@ -266,6 +265,15 @@ def optimize_dataframe_memory(df):
     
     for col in df.select_dtypes(include=['float64']).columns:
         df[col] = pd.to_numeric(df[col], downcast='float')
+    
+    # Convert specific known columns to category for better memory usage
+    category_columns = ['team', 'pos', 'projected_opening_day_status']
+    for col in category_columns:
+        if col in df.columns and df[col].dtype == 'object':
+            try:
+                df[col] = df[col].astype('category')
+            except:
+                pass
     
     return df
 
@@ -355,6 +363,14 @@ draft_type = st.radio(
 # Format selection
 format_type = st.selectbox("Select Format", ["50s", "OC"])
 
+# Clear cache from other format when switching (memory optimization)
+for other_format in ["50s", "OC"]:
+    if other_format != format_type:
+        other_cache_key = f"player_data_{other_format}"
+        if other_cache_key in st.session_state:
+            # Keep timestamp but clear data to free memory
+            del st.session_state[other_cache_key]
+
 # Table name based on format
 table_name = f"mart_preseason_overall_rankings_{format_type.lower()}"
 
@@ -402,8 +418,16 @@ if st.session_state[cache_key] is None:
                 cursor_class=PandasCursor
             )
             
-            # Simple query - get all players
-            query = f"SELECT * FROM {ATHENA_SCHEMA}.{table_name} ORDER BY rank"
+            # Select only columns we actually use (memory optimization)
+            # This reduces memory usage significantly compared to SELECT *
+            columns_needed = [
+                'id', 'name', 'team', 'pos', 'rank', 'adp', 'min_pick', 'max_pick', 
+                'rank_diff', 'projected_opening_day_status', 'value', 
+                'pa', 'ab', 'r', 'hr', 'rbi', 'sb', 'avg', 'obp', 'slg', 
+                'ip', 'k', 'w', 'sv', 'era', 'whip'
+            ]
+            columns_str = ', '.join(columns_needed)
+            query = f"SELECT {columns_str} FROM {ATHENA_SCHEMA}.{table_name} ORDER BY rank"
             
             # Execute query and get results as pandas DataFrame
             cursor = conn.cursor()
@@ -1013,7 +1037,25 @@ if st.session_state[cache_key] is not None:
             st.info("Add players to 'My Team' to see stats comparison.")
         
         st.markdown("---")
-        st.subheader(f"Results: {len(filtered_df)} players")
+        
+        # Add row limit option to reduce memory usage
+        row_limit_key = f"row_limit_{format_type}"
+        if row_limit_key not in st.session_state:
+            st.session_state[row_limit_key] = 500  # Default to 500 rows
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.subheader(f"Results: {len(filtered_df)} players")
+        with col2:
+            row_limit = st.number_input(
+                "Max Rows to Display",
+                min_value=100,
+                max_value=5000,
+                value=st.session_state[row_limit_key],
+                step=100,
+                help="Limit displayed rows to reduce memory usage",
+                key=row_limit_key
+            )
         
         # Prepare dataframe for editing - only include specified columns in specified order
         desired_columns = [
@@ -1026,6 +1068,13 @@ if st.session_state[cache_key] is not None:
         # Only include columns that exist in the dataframe
         available_columns = [col for col in desired_columns if col in filtered_df.columns]
         display_df = filtered_df[available_columns].copy()
+        
+        # Limit the display dataframe only (not the underlying filtered_df used for charts/calculations)
+        # This way charts, team stats, and filtering still work with all data
+        original_count = len(display_df)
+        if original_count > row_limit:
+            display_df = display_df.head(row_limit)
+            st.info(f"⚠️ Showing first {row_limit} of {original_count} filtered players in table. Charts and stats use all {original_count} players. Adjust 'Max Rows to Display' to see more.")
         
         # Apply rounding to numeric columns
         # Round to whole numbers
