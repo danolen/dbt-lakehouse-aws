@@ -47,6 +47,16 @@ Although the current dataset is small, the architecture is designed to scale nat
   - Make use of variables and macros to make project more modular
   - Simplify model lineage
  
+### Draft Tool Application
+- Used **Streamlit** to create a web app to be used in a draft
+- Mobile- and desktop-friendly interface
+- Includes all of my player rankings and valuations for various fantasy baseball contest formats, including projected player stats
+- Real-time filtering and sorting
+- Access anywhere
+- Track which players have/haven't been drafted
+  - Use **Amazon DynamoDB** to track and update the drafted status of a player with the click of a button
+  - Decouple player drafted status from analytical data
+ 
 ### Access control
 - IAM roles
 
@@ -56,16 +66,6 @@ Although the current dataset is small, the architecture is designed to scale nat
 ---
 
 ## Planned future enhancements
-
-### Draft Tool Application
-- Use **Streamlit** to create a web app to be used in a draft
-- Mobile- and desktop-friendly interface
-- Includes all of my player rankings and valuations for various fantasy baseball contest formats, including projected player stats
-- Real-time filtering and sorting
-- Access anywhere
-- Track which players have/haven't been drafted
-  - Use **Amazon DynamoDB** to track and update the drafted status of a player with the click of a button
-  - Decouple player drafted status from analytical data
 
 ### In-Season Tools
 - Another **Streamlit** web app to help with player add/drop decisions, lineup optimization, etc.
