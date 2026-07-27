@@ -147,3 +147,44 @@ models:
               - source_league_key
               - snapshot_date
               - standing_rank
+
+  - name: stg_nfbc_overall_category_long
+    description: >-
+      Unpivoted overall category stats + points. One row per contest,
+      snapshot, team, and scoring category. Feeds mart_overall_category_mobility.
+    columns:
+      - name: contest_key
+        data_tests:
+          - not_null
+      - name: snapshot_date
+        data_tests:
+          - not_null
+      - name: team_key
+        data_tests:
+          - not_null
+      - name: category
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['R', 'HR', 'RBI', 'SB', 'AVG', 'K', 'W', 'SV', 'ERA', 'WHIP']
+      - name: raw_stat
+        data_tests:
+          - not_null
+      - name: category_points
+        data_tests:
+          - not_null
+      - name: higher_is_better
+        data_tests:
+          - not_null
+      - name: is_ratio
+        data_tests:
+          - not_null
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - contest_key
+              - snapshot_date
+              - team_key
+              - category
