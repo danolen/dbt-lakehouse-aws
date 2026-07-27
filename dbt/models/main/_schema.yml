@@ -155,3 +155,62 @@ models:
         data_tests:
           - unique
           - not_null
+
+  - name: mart_overall_category_mobility
+    description: >-
+      Overall-contest category cutlines and mobility from actual NFBC
+      category-stat/points distributions. Grain is one row per contest,
+      snapshot, team, and category. Primary signals are local marginal
+      slope (±25 points), nearest point islands, and the 10/25/50/100
+      raw-stat ladder. Filter is_latest_snapshot for current decisions.
+    columns:
+      - name: contest_key
+        data_tests:
+          - not_null
+      - name: snapshot_date
+        data_tests:
+          - not_null
+      - name: team_key
+        data_tests:
+          - not_null
+      - name: category
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['R', 'HR', 'RBI', 'SB', 'AVG', 'K', 'W', 'SV', 'ERA', 'WHIP']
+      - name: raw_stat
+        data_tests:
+          - not_null
+      - name: category_points
+        data_tests:
+          - not_null
+      - name: higher_is_better
+        data_tests:
+          - not_null
+      - name: is_ratio
+        data_tests:
+          - not_null
+      - name: slope_window_points
+        data_tests:
+          - not_null
+      - name: raw_gap_up_10
+        description: Favorable raw units needed to gain ~10 category points.
+      - name: raw_gap_up_25
+        description: Favorable raw units needed to gain ~25 category points.
+      - name: raw_gap_up_50
+        description: Favorable raw units needed to gain ~50 category points.
+      - name: raw_gap_up_100
+        description: Favorable raw units needed to gain ~100 category points.
+      - name: raw_per_category_point
+        description: >-
+          Local density: favorable raw units per category point across the
+          ±slope_window_points band.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - contest_key
+              - snapshot_date
+              - team_key
+              - category
