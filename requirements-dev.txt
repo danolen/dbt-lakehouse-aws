@@ -18,7 +18,13 @@
 # fail source freshness with:
 #   BaseCursor._execute() got an unexpected keyword argument 'work_group'
 # Keep in sync with requirements.txt until dbt-athena catches up.
+#
+# Pin ruff: CI previously did bare `pip install ruff`, so PR #190 passed on
+# 0.15.22 and then failed after merge when 0.16.0 started flagging ~67
+# pre-existing findings. Keep the known-good version until we intentionally
+# adopt a newer Ruff + rule config.
 
 dbt-core==1.12.0
 dbt-athena==1.10.0
 pyathena==3.35.2
+ruff==0.15.22
