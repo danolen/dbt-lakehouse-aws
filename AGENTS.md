@@ -18,8 +18,22 @@
 
 ### AWS vs this repository
 
-- **AWS** (S3, Glue, Athena, IAM, ECS, etc.) is handled by the maintainer unless they say otherwise. Agents work in **this repo** (dbt, Streamlit, seeds, Python utils, docs) and can describe needed AWS steps for the maintainer to apply.
-- **Security / IAM matrix, secrets inventory, rotation:** see [`docs/security.md`](docs/security.md). Do not widen IAM or reuse admin keys in apps without updating that doc.
+- **IAM / Glue DDL / Athena workgroups / Terraform apply / ingest prefixes** are
+  handled by the maintainer unless they say otherwise. Agents describe needed
+  AWS steps in the PR; they do not widen IAM or apply Terraform from a session.
+- **Athena query + narrow dbt builds** are allowed for Cloud Agents when the
+  least-privilege `cursor-agent-dbt-debug` secrets are present (see
+  [`docs/security.md`](docs/security.md) and
+  [`terraform/cursor_agent_dbt/`](terraform/cursor_agent_dbt/README.md)):
+  - Always `--target agent` (schema `dbt_agent`, workgroup `cursor-agent`)
+  - Prefer `dbt parse` first; then narrow `dbt show` / `dbt build --select <changed>+`
+  - Never set `ATHENA_SCHEMA=dbt_main` or write Streamlit prod
+  - Never Glue DDL outside `dbt_agent`; never overwrite ingest prefixes
+    (`nfbc/`, `fangraphs/`, `razzball/`, `ftn/`, `mapping/`)
+  - Never use maintainer admin / SSO credentials on agent VMs
+- **Security / IAM matrix, secrets inventory, rotation:** see
+  [`docs/security.md`](docs/security.md). Do not widen IAM or reuse admin keys
+  in apps or agent secrets without updating that doc.
 
 ---
 
@@ -68,6 +82,10 @@ All data flows through AWS (Athena, S3, DynamoDB). For full end-to-end testing, 
 - `AWS_SECRET_ACCESS_KEY`
 - `ATHENA_S3_OUTPUT` (required, no default)
 
+For Cloud Agent dbt/Athena debug (#198), also set `ATHENA_SCHEMA=dbt_agent`,
+`ATHENA_WORKGROUP=cursor-agent`, `ATHENA_S3_DATA_DIR`, and use
+`dbt … --target agent`. See [`docs/security.md`](docs/security.md).
+
 Without these, apps will start but show a config error. `dbt parse` works without credentials.
 
 ### Token efficiency (please read first)
@@ -88,7 +106,7 @@ Cloud agent runs cost real money. Before doing anything else on a ticket, follow
 - Combine related shell commands into one `Shell` call with `&&` chains rather than multiple invocations.
 - Avoid `computerUse`, `videoReview`, and `RecordScreen` unless the ticket is a visible UI change. Most Phase 1 work has no UI to record.
 - Avoid spinning up sub-`Task` agents unless the work is genuinely broad exploration. Each subagent multiplies token cost.
-- Prefer `dbt parse` (free, offline) over `dbt compile` / `dbt build` (slow, costs AWS). Only run AWS-touching commands when the acceptance criteria require it.
+- Prefer `dbt parse` (free, offline) over `dbt compile` / `dbt build` (slow, costs AWS). When agent Athena secrets are present and the ticket needs live validation, use `--target agent` with narrow selectors (`dbt show`, `dbt build --select <changed>+`) — not full-project builds. Only run AWS-touching commands when the acceptance criteria require it.
 - Skip the testing walkthrough for dotfile / template / CI-yaml-only changes. Apply the system prompt's "/no-test for trivial changes" spirit — if the change is mechanical and obviously correct, ship it.
 
 **Model selection: Composer vs. frontier**

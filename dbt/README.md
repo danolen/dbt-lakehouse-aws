@@ -115,12 +115,36 @@ either:
    dbt build --select <model>
    ```
 
+### Cursor Cloud Agent target (`--target agent`)
+
+Agents (and maintainers reproducing the agent path) use the `agent` output in
+[`profiles.yml`](profiles.yml). That target defaults to schema `dbt_agent` and
+workgroup `cursor-agent` — never Streamlit prod (`dbt_main`).
+
+IAM + workgroup setup: [`terraform/cursor_agent_dbt/README.md`](../terraform/cursor_agent_dbt/README.md).
+
+```bash
+# Prefer parse first (no Athena). Then narrow selects only:
+dbt parse
+dbt show --select <model> --target agent --limit 5
+dbt build --select <changed_model>+ --target agent
+```
+
+Required env (usually injected as Cursor secrets after Terraform apply):
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `ATHENA_S3_OUTPUT`,
+`ATHENA_S3_DATA_DIR`, `ATHENA_SCHEMA=dbt_agent`, `ATHENA_WORKGROUP=cursor-agent`.
+
+Do **not** run full-project `dbt build` on the agent path unless necessary — the
+workgroup enforces a per-query scan ceiling.
+
 For now the recommended workflow is:
 
 1. Write / edit models locally
 2. `dbt parse` + `dbt compile` to catch obvious errors
 3. Push the feature branch
-4. Validate before merge: `dbt parse` in CI, and—when you use Athena—`dbt build` locally or via dbt Cloud (ad-hoc or **Jobs**, once those exist)
+4. Validate before merge: `dbt parse` in CI, and—when you use Athena—narrow
+   `dbt build` / `dbt show` locally, via `--target agent`, or via dbt Cloud
+   (ad-hoc or **Jobs**, once those exist)
 5. Open a PR when you are satisfied builds and apps behave as expected
 
 ## Project layout

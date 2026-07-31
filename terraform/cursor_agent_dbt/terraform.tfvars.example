@@ -1,0 +1,24 @@
+# Copy to terraform.tfvars and adjust as needed.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+
+aws_region            = "us-east-1"
+s3_bucket             = "dn-lakehouse-dev"
+athena_results_prefix = "logs/athena-results-agent"
+agent_data_prefix     = "dbt_agent"
+
+iam_user_name  = "cursor-agent-dbt-debug"
+iam_user_path  = "/agents/"
+workgroup_name = "cursor-agent"
+agent_schema   = "dbt_agent"
+
+# 1 GiB per query; raise only if narrow dbt builds hit the ceiling often.
+bytes_scanned_cutoff_per_query = 1073741824
+
+ingest_deny_prefixes = [
+  "nfbc",
+  "fangraphs",
+  "razzball",
+  "ftn",
+  "mapping",
+]

@@ -1,12 +1,14 @@
-# Local dbt profile for this repo.
+# Local + agent dbt profiles for this repo.
 #
-# Scope: designed primarily for `dbt parse` and `dbt compile` (no AWS calls).
-# These commands validate Jinja, refs, sources, and macros without touching
-# Athena, so the placeholder defaults below are sufficient.
+# Scope: `dev` is designed primarily for `dbt parse` and `dbt compile` (no AWS
+# calls). Those commands validate Jinja, refs, sources, and macros without
+# touching Athena, so the placeholder defaults below are sufficient.
 #
-# If you later want to run `dbt build` / `dbt run` locally against Athena,
-# set the env vars below in your shell (or reuse your .env by sourcing it:
-# `set -a; source .env; set +a`) and dbt will pick them up.
+# The `agent` target is for Cursor Cloud Agents (and maintainers reproducing
+# the same path) against the non-prod Glue schema `dbt_agent` and Athena
+# workgroup `cursor-agent`. See terraform/cursor_agent_dbt/ and docs/security.md.
+# Agents MUST use `--target agent` (or DBT_TARGET=agent) and must never set
+# ATHENA_SCHEMA=dbt_main.
 #
 # Lookup: dbt searches for profiles.yml in the current dir first (as of dbt
 # 1.5+), so running dbt from the `dbt/` directory picks this file up
@@ -15,6 +17,7 @@
 default:
   target: dev
   outputs:
+    # Maintainer / local default — non-prod schema placeholder; not Streamlit prod.
     dev:
       type: athena
       s3_staging_dir: "{{ env_var('ATHENA_S3_OUTPUT', 's3://placeholder-bucket/staging/') }}"
@@ -23,4 +26,16 @@ default:
       database: "{{ env_var('ATHENA_DATABASE', 'AwsDataCatalog') }}"
       schema: "{{ env_var('ATHENA_SCHEMA', 'dbt_main_dev') }}"
       work_group: "{{ env_var('ATHENA_WORKGROUP', 'primary') }}"
+      threads: 4
+
+    # Cursor Cloud Agent path (#198). Defaults match terraform/cursor_agent_dbt.
+    # Prefer: dbt parse → narrow dbt show / dbt build --select <changed>+ --target agent
+    agent:
+      type: athena
+      s3_staging_dir: "{{ env_var('ATHENA_S3_OUTPUT', 's3://dn-lakehouse-dev/logs/athena-results-agent/') }}"
+      s3_data_dir: "{{ env_var('ATHENA_S3_DATA_DIR', 's3://dn-lakehouse-dev/dbt_agent/') }}"
+      region_name: "{{ env_var('ATHENA_REGION', 'us-east-1') }}"
+      database: "{{ env_var('ATHENA_DATABASE', 'AwsDataCatalog') }}"
+      schema: "{{ env_var('ATHENA_SCHEMA', 'dbt_agent') }}"
+      work_group: "{{ env_var('ATHENA_WORKGROUP', 'cursor-agent') }}"
       threads: 4
