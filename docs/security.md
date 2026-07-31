@@ -27,17 +27,19 @@ Related: epic [#154](https://github.com/danolen/fantasy-baseball-platform/issues
 | In-season Streamlit | IAM user `streamlit-inseason-tool` | Same Athena/Glue/S3 as draft; **no** DynamoDB | Streamlit Secrets → that user's access keys only |
 | GHA MPD ingest | OIDC role (default name `github-actions-mpd-player-map-ingest`) | `s3:PutObject` on `mapping/mpd_player_id_map/*` only | GitHub Actions OIDC (no long-lived AWS keys) |
 | GHA dbt freshness | OIDC role (default name `github-actions-dbt-source-freshness`) | Athena/Glue read; lakehouse read; Athena results prefix R/W | GitHub Actions OIDC |
+| Cursor Cloud Agent (Athena/dbt) | IAM user `cursor-agent-dbt-debug` (`/agents/`) | Athena query on workgroup `cursor-agent` only (1 GiB/query ceiling); Glue Get* everywhere; Glue table CUD **only** on `dbt_agent`; S3 read lakehouse; S3 R/W `dbt_agent/` + agent results prefix; **deny** Glue mutate `dbt_main` and S3 write on ingest prefixes | Cursor Cloud Agent secrets → that user's access keys only |
 | Prefect ingest flows | Prefect `AwsCredentials` block / future ECS task role | S3 put on vendor ingest prefixes; `secretsmanager:GetSecretValue` on `fantasy-baseball-platform` | Prefect block + AWS SM |
 | Maintainer admin | Personal IAM user / SSO (break-glass) | Full account as needed for Terraform, IAM, debugging | `~/.aws` / SSO — **never** paste into Streamlit or agent secrets |
-| Cursor Cloud Agent | GitHub App installation token + optional fine-grained PAT | Feature branches / PRs (integration); Issues create/label/edit via PAT | See [Agent GitHub access](#agent-github-access) |
+| Cursor Cloud Agent (GitHub) | GitHub App installation token + optional fine-grained PAT | Feature branches / PRs (integration); Issues create/label/edit via PAT | See [Agent GitHub access](#agent-github-access) |
 
 Terraform:
 
 - Streamlit users: [`terraform/streamlit_apps_iam/`](../terraform/streamlit_apps_iam/README.md)
 - GHA MPD: [`terraform/github_actions_mpd_ingest/`](../terraform/github_actions_mpd_ingest/README.md)
 - GHA freshness: [`terraform/github_actions_dbt_freshness/`](../terraform/github_actions_dbt_freshness/README.md)
+- Cursor agent Athena/dbt: [`terraform/cursor_agent_dbt/`](../terraform/cursor_agent_dbt/README.md)
 
-Do **not** widen GHA or Streamlit policies without updating this matrix in the same PR.
+Do **not** widen GHA, Streamlit, or agent policies without updating this matrix in the same PR.
 
 ---
 
@@ -73,6 +75,24 @@ Aliases still accepted by `scripts/create_planning_issues.py` for the PAT:
 |----------|----------|
 | Repo-root `.env` | Same names as Streamlit for local app / dbt runs |
 | `~/.aws/credentials` | Maintainer admin or named profiles — not committed |
+
+### Cursor Cloud Agent secrets (Athena/dbt debug, #198)
+
+Injected into Cursor Cloud Agent secrets for this repo after
+[`terraform/cursor_agent_dbt/`](../terraform/cursor_agent_dbt/README.md) apply.
+**Names only** — never commit values. Use the `cursor-agent-dbt-debug` keys only
+(not maintainer admin, not Streamlit users).
+
+| Name | Purpose |
+|------|---------|
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | IAM user `cursor-agent-dbt-debug` |
+| `AWS_DEFAULT_REGION` | Typically `us-east-1` |
+| `ATHENA_DATABASE` | `AwsDataCatalog` |
+| `ATHENA_SCHEMA` | Must be `dbt_agent` (never `dbt_main`) |
+| `ATHENA_REGION` | Typically `us-east-1` |
+| `ATHENA_WORKGROUP` | `cursor-agent` |
+| `ATHENA_S3_OUTPUT` | Agent workgroup results URI (`logs/athena-results-agent/`) |
+| `ATHENA_S3_DATA_DIR` | Agent Iceberg/dbt objects (`dbt_agent/`) |
 
 ### GitHub Actions (variables, not secrets)
 
@@ -121,8 +141,11 @@ Verified 2026-07-16 (`scripts/verify_gh_issue_pat.py` → probe #173) as part of
 
 Details: [`scripts/README.md`](../scripts/README.md).
 
-**AWS on agent VMs:** prefer no admin keys. Default to repo-only work; AWS is
-maintainer-applied per `AGENTS.md` unless the ticket says otherwise.
+**AWS on agent VMs:** never install maintainer admin / SSO credentials. When
+Athena/dbt debug is needed, use only the least-privilege
+`cursor-agent-dbt-debug` keys documented above (`--target agent`, schema
+`dbt_agent`, workgroup `cursor-agent`). Infra changes (IAM, Glue DDL outside
+`dbt_agent`, Terraform apply) remain maintainer-applied per `AGENTS.md`.
 
 ---
 
@@ -136,6 +159,17 @@ maintainer-applied per `AGENTS.md` unless the ticket says otherwise.
 4. `aws iam delete-access-key --user-name … --access-key-id <old>`.
 5. If the Streamlit **URL** leaked: rotate keys **and** treat the URL as public
    until auth lands (#166).
+
+### Cursor agent IAM access keys (`cursor-agent-dbt-debug`)
+
+1. `aws iam create-access-key --user-name cursor-agent-dbt-debug`.
+2. Update Cursor Cloud Agent secrets with the new key pair (keep Athena env vars
+   pointing at `dbt_agent` / `cursor-agent`).
+3. Smoke: `dbt show --select <model> --target agent --limit 1` from `dbt/`.
+4. `aws iam delete-access-key --user-name cursor-agent-dbt-debug --access-key-id <old>`.
+5. If agent secrets may have leaked: rotate immediately; agent keys cannot write
+   `dbt_main` or ingest prefixes, but can still scan Athena within the workgroup
+   ceiling and mutate `dbt_agent`.
 
 ### Fine-grained GitHub PAT (`gh_pat_issue_and_script_work`)
 
@@ -235,3 +269,5 @@ should wait on CI. Use bypass only for truly small changes.
 | Remove draft `CreateTable` + `allow_dynamodb_create_table = false` | #147 (deferred until draft redeploy) |
 | Enable Streamlit Cloud authentication | #166 |
 | Adopt GitHub Environments for GHA OIDC | #168 |
+| Optional CloudWatch alarm on agent workgroup bytes scanned | follow-up to #198 |
+| GHA PR `dbt build` via OIDC (near-term unblock alternative) | follow-up to #198 §5 |
