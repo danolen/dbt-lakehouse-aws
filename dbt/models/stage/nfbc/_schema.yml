@@ -3,8 +3,10 @@ version: 2
 models:
   - name: stg_nfbc_in_season_overall_overview
     description: >-
-      Typed NFBC overall overview standings. One row per team per source
-      league key per snapshot date. Full history retained; filter
+      Typed NFBC overall overview standings. Grain is one row per contest
+      (source_league_key), snapshot_date, and team identity
+      (nfbc_league_id + team). standing_rank is not unique — tied overall
+      scores share a rank. Full history retained; filter
       is_latest_snapshot = true for the current contest snapshot.
     columns:
       - name: standing_rank
@@ -38,18 +40,23 @@ models:
               arguments:
                 values: ['oc', 'me', '50s']
     data_tests:
+      # Ties share standing_rank; team identity is nfbc_league_id + team
+      # (matches team_key in stg_nfbc_overall_category_long).
       - dbt_utils.unique_combination_of_columns:
           arguments:
             combination_of_columns:
               - source_league_key
               - snapshot_date
-              - standing_rank
+              - nfbc_league_id
+              - team
 
   - name: stg_nfbc_in_season_overall_category_stats
     description: >-
       Typed NFBC overall category-stat standings. Counting and ratio stats are
-      numeric; unused placeholders are not present. Full history retained;
-      filter is_latest_snapshot = true for the current contest snapshot.
+      numeric; unused placeholders are not present. Grain is contest,
+      snapshot, nfbc_league_id, and team (standing_rank ties are expected).
+      Full history retained; filter is_latest_snapshot = true for the
+      current contest snapshot.
     columns:
       - name: standing_rank
         data_tests:
@@ -87,13 +94,16 @@ models:
             combination_of_columns:
               - source_league_key
               - snapshot_date
-              - standing_rank
+              - nfbc_league_id
+              - team
 
   - name: stg_nfbc_in_season_overall_category_points
     description: >-
       Typed NFBC overall category-points standings. Point columns are named
-      distinctly from raw stats (r_pts, hr_pts, ...). Full history retained;
-      filter is_latest_snapshot = true for the current contest snapshot.
+      distinctly from raw stats (r_pts, hr_pts, ...). Grain is contest,
+      snapshot, nfbc_league_id, and team (standing_rank ties are expected).
+      Full history retained; filter is_latest_snapshot = true for the
+      current contest snapshot.
     columns:
       - name: standing_rank
         data_tests:
@@ -146,7 +156,8 @@ models:
             combination_of_columns:
               - source_league_key
               - snapshot_date
-              - standing_rank
+              - nfbc_league_id
+              - team
 
   - name: stg_nfbc_overall_category_long
     description: >-
