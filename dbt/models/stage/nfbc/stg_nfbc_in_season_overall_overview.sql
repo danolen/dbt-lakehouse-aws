@@ -24,7 +24,7 @@ with cleaned as (
         _ptkey,
         _filename,
         _loaddatetime,
-        regexp_replace(_filename, '(?i)\\.csv$', '') as source_league_key,
+        regexp_replace(_filename, '(?i)\.csv$', '') as source_league_key,
         date(
             date_parse(
                 concat(

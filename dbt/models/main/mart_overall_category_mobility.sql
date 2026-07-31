@@ -276,7 +276,7 @@ enriched as (
         and b.category = ld{{ delta }}.category
         and ld{{ delta }}.delta_points = {{ delta }}
     {% endfor %}
-)
+),
 
 calc as (
     select
