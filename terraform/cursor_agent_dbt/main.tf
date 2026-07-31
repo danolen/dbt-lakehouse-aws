@@ -19,8 +19,6 @@ locals {
   glue_all_tbl_arn   = "arn:aws:glue:${var.aws_region}:${local.account_id}:table/*/*"
   glue_agent_db_arn  = "arn:aws:glue:${var.aws_region}:${local.account_id}:database/${var.agent_schema}"
   glue_agent_tbl_arn = "arn:aws:glue:${var.aws_region}:${local.account_id}:table/${var.agent_schema}/*"
-  glue_main_db_arn   = "arn:aws:glue:${var.aws_region}:${local.account_id}:database/dbt_main"
-  glue_main_tbl_arn  = "arn:aws:glue:${var.aws_region}:${local.account_id}:table/dbt_main/*"
 
   glue_mutation_actions = [
     "glue:CreateTable",
@@ -35,7 +33,6 @@ locals {
     "glue:UpdateDatabase",
     "glue:DeleteDatabase",
   ]
-
 }
 
 # ---------------------------------------------------------------------------
@@ -87,8 +84,10 @@ resource "aws_iam_user" "agent" {
   }
 }
 
+# Customer-managed policy (6 KiB limit). Inline user policies are capped at
+# 2 KiB and this document exceeded that on first apply (#198).
 data "aws_iam_policy_document" "agent" {
-  # Athena: only the agent workgroup
+  # Athena: only the agent workgroup (+ query execution ARNs for result polling)
   statement {
     sid    = "AthenaQueryAgentWorkgroup"
     effect = "Allow"
@@ -101,21 +100,8 @@ data "aws_iam_policy_document" "agent" {
       "athena:ListQueryExecutions",
       "athena:BatchGetQueryExecution",
     ]
-    resources = [local.workgroup_arn]
-  }
-
-  # GetQueryResults / GetQueryExecution also need the query-execution ARN shape
-  # when callers pass execution IDs; scope to this account's Athena queries.
-  statement {
-    sid    = "AthenaQueryExecutionRead"
-    effect = "Allow"
-    actions = [
-      "athena:GetQueryExecution",
-      "athena:GetQueryResults",
-      "athena:StopQueryExecution",
-      "athena:BatchGetQueryExecution",
-    ]
     resources = [
+      local.workgroup_arn,
       "arn:aws:athena:${var.aws_region}:${local.account_id}:query/*",
     ]
   }
@@ -163,18 +149,7 @@ data "aws_iam_policy_document" "agent" {
     ]
   }
 
-  # Explicit deny on Streamlit prod schema
-  statement {
-    sid     = "DenyGlueMutateDbtMain"
-    effect  = "Deny"
-    actions = local.glue_mutation_actions
-    resources = [
-      local.glue_main_db_arn,
-      local.glue_main_tbl_arn,
-    ]
-  }
-
-  # Deny Glue mutation on anything that is not the agent schema
+  # Deny Glue mutation outside agent schema (covers dbt_main and all other DBs)
   statement {
     sid     = "DenyGlueMutateOutsideAgent"
     effect  = "Deny"
@@ -186,7 +161,7 @@ data "aws_iam_policy_document" "agent" {
     ]
   }
 
-  # Lakehouse source reads
+  # Lakehouse source reads (ListBucket on whole bucket; object writes are scoped below)
   statement {
     sid    = "ReadLakehouseData"
     effect = "Allow"
@@ -201,26 +176,6 @@ data "aws_iam_policy_document" "agent" {
     ]
   }
 
-  # Athena results prefix (ListBucket scoped)
-  statement {
-    sid    = "AthenaResultsBucket"
-    effect = "Allow"
-    actions = [
-      "s3:ListBucket",
-      "s3:GetBucketLocation",
-    ]
-    resources = [local.lakehouse_bucket]
-
-    condition {
-      test     = "StringLike"
-      variable = "s3:prefix"
-      values = [
-        "${local.athena_results_key}/*",
-        local.athena_results_key,
-      ]
-    }
-  }
-
   statement {
     sid    = "AthenaResultsObjects"
     effect = "Allow"
@@ -230,26 +185,6 @@ data "aws_iam_policy_document" "agent" {
       "s3:DeleteObject",
     ]
     resources = [local.athena_results_arn]
-  }
-
-  # Agent Iceberg / dbt object prefix
-  statement {
-    sid    = "AgentDataBucket"
-    effect = "Allow"
-    actions = [
-      "s3:ListBucket",
-      "s3:GetBucketLocation",
-    ]
-    resources = [local.lakehouse_bucket]
-
-    condition {
-      test     = "StringLike"
-      variable = "s3:prefix"
-      values = [
-        "${local.agent_data_key}/*",
-        local.agent_data_key,
-      ]
-    }
   }
 
   statement {
@@ -264,10 +199,8 @@ data "aws_iam_policy_document" "agent" {
     ]
     resources = [local.agent_data_arn]
   }
-}
 
-# Object Put/Delete Deny must match object key ARNs (s3:prefix only applies to ListBucket).
-data "aws_iam_policy_document" "agent_ingest_deny_objects" {
+  # Object Put/Delete Deny must match object key ARNs (s3:prefix only applies to ListBucket).
   statement {
     sid    = "DenyIngestObjectWrites"
     effect = "Deny"
@@ -283,15 +216,20 @@ data "aws_iam_policy_document" "agent_ingest_deny_objects" {
   }
 }
 
-data "aws_iam_policy_document" "agent_combined" {
-  source_policy_documents = [
-    data.aws_iam_policy_document.agent.json,
-    data.aws_iam_policy_document.agent_ingest_deny_objects.json,
-  ]
+resource "aws_iam_policy" "agent" {
+  name        = "cursor-agent-dbt-debug"
+  path        = var.iam_user_path
+  description = "Least-privilege Athena/dbt debug for Cursor Cloud Agents (#198)."
+  policy      = data.aws_iam_policy_document.agent.json
+
+  tags = {
+    Project = "fantasy-baseball-platform"
+    Ticket  = "198"
+    Actor   = "cursor-agent"
+  }
 }
 
-resource "aws_iam_user_policy" "agent" {
-  name   = "cursor-agent-dbt-debug"
-  user   = aws_iam_user.agent.name
-  policy = data.aws_iam_policy_document.agent_combined.json
+resource "aws_iam_user_policy_attachment" "agent" {
+  user       = aws_iam_user.agent.name
+  policy_arn = aws_iam_policy.agent.arn
 }

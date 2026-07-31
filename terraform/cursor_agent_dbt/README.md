@@ -8,6 +8,7 @@ Cursor Cloud Agents can run narrow `dbt build` / `dbt show` against a
 | Resource | Default name | Purpose |
 |----------|--------------|---------|
 | IAM user | `cursor-agent-dbt-debug` (`/agents/`) | Agent AWS principal |
+| IAM managed policy | `cursor-agent-dbt-debug` | Attached permissions (managed policy — inline user policies are capped at 2 KiB) |
 | Athena workgroup | `cursor-agent` | Enforced 1 GiB/query scan limit + dedicated results prefix |
 | Glue database | `dbt_agent` | Only schema agents may Create/Update/Delete tables in |
 | S3 data prefix | `dbt_agent/` | Iceberg/dbt object writes |
