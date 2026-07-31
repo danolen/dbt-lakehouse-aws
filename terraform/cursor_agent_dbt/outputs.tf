@@ -8,6 +8,11 @@ output "iam_user_arn" {
   value       = aws_iam_user.agent.arn
 }
 
+output "iam_policy_arn" {
+  description = "Customer-managed policy ARN attached to the agent user."
+  value       = aws_iam_policy.agent.arn
+}
+
 output "workgroup_name" {
   description = "Athena workgroup agents must use (ATHENA_WORKGROUP)."
   value       = aws_athena_workgroup.cursor_agent.name
