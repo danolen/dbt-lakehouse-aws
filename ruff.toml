@@ -1,0 +1,14 @@
+# Restore Ruff's pre-0.16 default rule set.
+# Ruff 0.16 expanded defaults from ~59 to ~413 rules; adopting that set
+# wholesale would flag dozens of pre-existing findings (BLE001, UP*, DTZ*, …)
+# across Streamlit apps and utils. Keep the known-good baseline here and
+# expand select intentionally in follow-ups.
+# See: https://astral.sh/blog/ruff-v0.16.0
+
+[lint]
+select = [
+    "E4", # Import-related pycodestyle
+    "E7", # Statement-related pycodestyle
+    "E9", # Runtime pycodestyle errors
+    "F",  # Pyflakes
+]
