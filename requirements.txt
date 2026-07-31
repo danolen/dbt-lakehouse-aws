@@ -1,4 +1,4 @@
-streamlit==1.59.2
+streamlit==1.60.0
 boto3==1.43.56
 pandas==3.0.3
 pyathena==3.35.3
