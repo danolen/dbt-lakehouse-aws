@@ -38,6 +38,9 @@ jobs:
       - name: Ruff
         run: ruff check apps/ utils/ scripts/
 
+      - name: Pytest
+        run: pytest tests/ -q
+
       - name: dbt deps
         working-directory: dbt
         run: dbt deps

@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from pyathena import connect
 from pyathena.pandas.cursor import PandasCursor
 
-from lineup_optimizer import optimize_lineup
+from lineup_optimizer import optimize_week
 
 # Display order for the starters table. Intentionally different from the
 # greedy fill order (which is most-constrained first) — this is purely a
@@ -438,22 +438,44 @@ with tab_lineup:
         else "N/A"
     )
 
-    slot_counts_df = slots_df[
-        (slots_df["format"] == fmt) & (slots_df["slot_group"] == "hitter")
-    ]
-    slot_counts = dict(
-        zip(
-            slot_counts_df["slot"].astype(str).tolist(),
-            slot_counts_df["count"].astype(int).tolist(),
+    def _slot_counts_for(group):
+        rows = slots_df[
+            (slots_df["format"] == fmt) & (slots_df["slot_group"] == group)
+        ]
+        return dict(
+            zip(
+                rows["slot"].astype(str).tolist(),
+                rows["count"].astype(int).tolist(),
+            )
         )
-    )
 
-    if not slot_counts:
+    hitter_slot_counts = _slot_counts_for("hitter")
+    pitcher_slot_counts = _slot_counts_for("pitcher")
+
+    if not hitter_slot_counts:
         st.error(
             f"No hitter slot config found for format `{fmt}` in "
             "`league_roster_slots`. Re-run `dbt seed`."
         )
         st.stop()
+
+    # NFBC locks pitchers for the full week on Monday and allows hitter-only
+    # swaps on Friday, so the two windows are different questions.
+    lineup_mode = st.radio(
+        "Lineup window",
+        options=["monday", "friday"],
+        format_func=lambda m: (
+            "Monday lock (full week, hitters + pitchers)"
+            if m == "monday"
+            else "Friday swap (hitters only, Fri–Sun)"
+        ),
+        horizontal=True,
+        key="lineup_mode",
+    )
+
+    slot_counts = dict(hitter_slot_counts)
+    if lineup_mode == "monday":
+        slot_counts.update(pitcher_slot_counts)
 
     team_all = lineup_df[lineup_df["owner"] == selected_owner].copy()
 
@@ -461,21 +483,9 @@ with tab_lineup:
         st.warning(f"No players rostered to `{selected_owner}`.")
         st.stop()
 
-    # #58 expanded this mart with pitcher rows. v1 optimizer is hitters-only;
-    # filter explicitly so SP/RP rows never land in UTIL via the catch-all.
-    if "row_type" in team_all.columns:
-        team = team_all[team_all["row_type"].fillna("hitter") == "hitter"].copy()
-        team_pitchers = team_all[team_all["row_type"] == "pitcher"].copy()
-    else:
-        team = team_all
-        team_pitchers = team_all.iloc[0:0].copy()
-
-    if team.empty:
-        st.warning(
-            f"No hitter rows rostered to `{selected_owner}` with a weekly "
-            "hitting projection."
-        )
-        st.stop()
+    if "row_type" not in team_all.columns:
+        team_all["row_type"] = "hitter"
+    team_all["row_type"] = team_all["row_type"].fillna("hitter")
 
     # Derive pos_array from pos_raw (plain comma-separated string) rather
     # than trusting the Athena array column — pyathena serializes arrays as
@@ -485,11 +495,36 @@ with tab_lineup:
             return []
         return [p.strip().upper() for p in str(raw).split(",") if p.strip()]
 
-    team["pos_array"] = team["pos_raw"].apply(_parse_pos)
+    team_all["pos_array"] = team_all["pos_raw"].apply(_parse_pos)
 
-    players = team.to_dict(orient="records")
+    team = team_all[team_all["row_type"] == "hitter"].copy()
+    team_pitchers = team_all[team_all["row_type"] == "pitcher"].copy()
 
-    result = optimize_lineup(players, slot_counts)
+    if team.empty:
+        st.warning(
+            f"No hitter rows rostered to `{selected_owner}` with a weekly "
+            "hitting projection."
+        )
+        st.stop()
+
+    players = team_all.to_dict(orient="records")
+
+    if lineup_mode == "friday":
+        # Pitchers were locked Monday; carry the Monday set through untouched.
+        monday = optimize_week(
+            players, {**hitter_slot_counts, **pitcher_slot_counts}, mode="monday"
+        )
+        locked_pitchers = [
+            a.player for a in monday.starters if a.slot == "P"
+        ]
+        result = optimize_week(
+            players,
+            slot_counts,
+            mode="friday",
+            locked_pitchers=locked_pitchers,
+        )
+    else:
+        result = optimize_week(players, slot_counts, mode="monday")
 
     active_capacity = sum(slot_counts.values())
     c1, c2, c3, c4 = st.columns(4)
@@ -497,6 +532,28 @@ with tab_lineup:
     c2.metric("Team Hitters", len(team))
     c3.metric("Active Slots", active_capacity)
     c4.metric("Projected $", f"{result.total_score:.1f}")
+
+    totals = result.totals or {}
+
+    def _fmt(value, spec):
+        return format(value, spec) if isinstance(value, (int, float)) else "—"
+
+    t1, t2, t3, t4, t5 = st.columns(5)
+    t1.metric("R / HR", f"{_fmt(totals.get('r'), '.0f')} / {_fmt(totals.get('hr'), '.0f')}")
+    t2.metric("RBI / SB", f"{_fmt(totals.get('rbi'), '.0f')} / {_fmt(totals.get('sb'), '.1f')}")
+    t3.metric("AVG", _fmt(totals.get("avg"), ".3f"))
+    t4.metric("K / W / SV", f"{_fmt(totals.get('k'), '.0f')} / {_fmt(totals.get('w'), '.1f')} / {_fmt(totals.get('sv'), '.1f')}")
+    t5.metric("ERA / WHIP", f"{_fmt(totals.get('era'), '.2f')} / {_fmt(totals.get('whip'), '.2f')}")
+    st.caption(
+        "Ratio totals are computed from aggregated numerators and denominators "
+        "(H/AB, ER/IP, (H+BB)/IP), not averaged across players."
+    )
+
+    if result.missing_projection_ids:
+        st.info(
+            f"{len(result.missing_projection_ids)} rostered player(s) have no "
+            "weekly projection for this window and were scored as zero."
+        )
 
     if result.unfilled_slots:
         st.warning(
@@ -523,6 +580,8 @@ with tab_lineup:
     starters_records = []
     slot_order_index = {s: i for i, s in enumerate(SLOT_DISPLAY_ORDER)}
     for a in result.starters:
+        if a.slot == "P":
+            continue
         row = {"slot": a.slot}
         for k in starter_cols[1:]:
             row[k] = a.player.get(k)
@@ -583,15 +642,19 @@ with tab_lineup:
         "vs_lhp",
         "ros_value",
     ]
+    bench_hitters = [
+        p for p in result.bench if (p.get("row_type") or "hitter") == "hitter"
+    ]
+    bench_pitchers = [p for p in result.bench if p.get("row_type") == "pitcher"]
     bench_records = [
-        {k: p.get(k) for k in bench_cols} for p in result.bench
+        {k: p.get(k) for k in bench_cols} for p in bench_hitters
     ]
     bench_df = pd.DataFrame(bench_records, columns=bench_cols)
     for col in ("dollars", "dollars_per_game", "ros_value"):
         if col in bench_df.columns:
             bench_df[col] = pd.to_numeric(bench_df[col], errors="coerce").round(1)
 
-    st.markdown(f"### Bench ({len(bench_df)})")
+    st.markdown(f"### Bench hitters ({len(bench_df)})")
     st.dataframe(
         bench_df.rename(
             columns={
@@ -613,102 +676,100 @@ with tab_lineup:
         hide_index=True,
     )
 
-    if not team_pitchers.empty:
-        pitch_cols = [
-            c
-            for c in [
-                "player_name",
-                "team",
-                "pos_raw",
-                "dollars",
-                "pitch_g",
-                "gs",
-                "first_start_day",
-                "is_two_start",
-                "opps",
-                "w",
-                "sv",
-                "k",
-                "ip",
-                "er",
-                "hits_allowed",
-                "walks_allowed",
-                "era",
-                "whip",
-                "ros_value",
-            ]
-            if c in team_pitchers.columns
-        ]
-        pitch_view = team_pitchers[pitch_cols].copy()
-        for col in (
-            "dollars",
-            "pitch_g",
-            "gs",
-            "w",
-            "sv",
-            "k",
-            "ip",
-            "er",
-            "hits_allowed",
-            "walks_allowed",
-            "era",
-            "whip",
-            "ros_value",
-        ):
-            if col in pitch_view.columns:
-                pitch_view[col] = pd.to_numeric(
-                    pitch_view[col], errors="coerce"
-                ).round(2)
-        if "dollars" in pitch_view.columns:
-            pitch_view = pitch_view.sort_values(
-                "dollars", ascending=False, na_position="last"
+    PITCHER_COLS = [
+        "player_name",
+        "team",
+        "pos_raw",
+        "dollars",
+        "pitch_g",
+        "gs",
+        "first_start_day",
+        "is_two_start",
+        "opps",
+        "w",
+        "sv",
+        "k",
+        "ip",
+        "er",
+        "hits_allowed",
+        "walks_allowed",
+        "era",
+        "whip",
+        "ros_value",
+    ]
+    PITCHER_LABELS = {
+        "player_name": "Player",
+        "team": "Team",
+        "pos_raw": "Pos",
+        "dollars": "Wk $",
+        "pitch_g": "G",
+        "gs": "GS",
+        "first_start_day": "1st",
+        "is_two_start": "2-start",
+        "opps": "Opp",
+        "w": "W",
+        "sv": "SV",
+        "k": "K",
+        "ip": "IP",
+        "er": "ER",
+        "hits_allowed": "H",
+        "walks_allowed": "BB",
+        "era": "ERA",
+        "whip": "WHIP",
+        "ros_value": "RoS $",
+    }
+
+    def _pitcher_frame(records):
+        df_p = pd.DataFrame(
+            [{k: p.get(k) for k in PITCHER_COLS} for p in records],
+            columns=PITCHER_COLS,
+        )
+        for col in PITCHER_COLS:
+            if col in ("player_name", "team", "pos_raw", "first_start_day", "opps", "is_two_start"):
+                continue
+            df_p[col] = pd.to_numeric(df_p[col], errors="coerce").round(2)
+        return df_p.sort_values("dollars", ascending=False, na_position="last")
+
+    started_pitchers = [a.player for a in result.starters if a.slot == "P"]
+
+    if started_pitchers:
+        st.markdown(f"### Pitchers started ({len(started_pitchers)})")
+        if lineup_mode == "friday":
+            st.caption(
+                "Pitchers locked at Monday's deadline — NFBC does not allow "
+                "pitcher changes during the week."
             )
-        st.markdown(
-            f"### Pitchers this week ({len(pitch_view)}) — projection only"
-        )
-        st.caption(
-            "Pitcher rows are available for streaming / expected-lineup work "
-            "(#60). The v1 optimizer above remains hitters-only."
-        )
         st.dataframe(
-            pitch_view.rename(
-                columns={
-                    "player_name": "Player",
-                    "team": "Team",
-                    "pos_raw": "Pos",
-                    "dollars": "Wk $",
-                    "pitch_g": "G",
-                    "gs": "GS",
-                    "first_start_day": "1st",
-                    "is_two_start": "2-start",
-                    "opps": "Opp",
-                    "w": "W",
-                    "sv": "SV",
-                    "k": "K",
-                    "ip": "IP",
-                    "er": "ER",
-                    "hits_allowed": "H",
-                    "walks_allowed": "BB",
-                    "era": "ERA",
-                    "whip": "WHIP",
-                    "ros_value": "RoS $",
-                }
-            ),
+            _pitcher_frame(started_pitchers).rename(columns=PITCHER_LABELS),
             use_container_width=True,
             hide_index=True,
         )
 
-    with st.expander("How this works (v1)"):
+    if bench_pitchers:
+        st.markdown(f"### Bench pitchers ({len(bench_pitchers)})")
+        st.dataframe(
+            _pitcher_frame(bench_pitchers).rename(columns=PITCHER_LABELS),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    with st.expander("How this works (v2)"):
         st.markdown(
-            "- **Greedy Monday-lock**: for each slot in a fixed order (C, SS, "
-            "2B, 3B, 1B, OF, MI, CI, UTIL), fill with the highest full-week "
-            "`dollars` unassigned eligible hitter.\n"
-            "- **Score**: Razzball weekly $ (full Mon–Sun). v2 adds a "
-            "Friday-lock view with the weekend-only file.\n"
-            "- **Known limitation**: greedy can be suboptimal when a player "
-            "is eligible at multiple scarce slots. MILP global optimum lands "
-            "in #60.\n"
-            "- **Pitchers**: component projections (W/SV/K/IP, start day, "
-            "two-start flag) are in `mart_weekly_lineup_inputs` as "
-            "`row_type='pitcher'` (#58). Active pitcher selection is #60."
+            "- **Exact assignment**: hitters are matched to C/1B/2B/3B/SS/MI/"
+            "CI/OF/UTIL with a Hungarian solver, so a player eligible at two "
+            "scarce slots can no longer strand a better lineup the way the v1 "
+            "greedy fill could.\n"
+            "- **Pitchers**: the nine P slots are filled from weekly pitcher "
+            "projections in the same pass.\n"
+            "- **Monday lock vs Friday swap**: NFBC locks pitchers for the "
+            "whole week on Monday and permits hitter-only swaps on Friday. "
+            "The Friday view re-optimizes hitters on Fri–Sun projections and "
+            "carries the Monday pitcher set through unchanged.\n"
+            "- **Ratio totals** come from aggregated numerators and "
+            "denominators (H/AB, ER/IP, (H+BB)/IP).\n"
+            "- **Utility Advantage**: when two hitters are equally valuable, "
+            "the less flexible one takes the exact slot so the multi-position "
+            "bat stays available for UTIL/MI/CI.\n"
+            "- **Next**: category weighting from overall mobility (#186) and "
+            "FAAB add/drop what-if (#187) both call this same engine."
         )
