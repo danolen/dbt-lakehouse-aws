@@ -91,7 +91,7 @@ select
     ftn.ftn_notes,
     ftn.bid_change,
     ftn.status_tag,
-    cast(case when ftn.nfbc_id is not null then 1 else 0 end as int) as has_ftn_rec,
+    cast(case when ftn.player_clean is not null then 1 else 0 end as int) as has_ftn_rec,
     wp.my_faab_remaining,
     wp.faab_as_of_date,
     -- What fraction of your remaining budget this bid would consume. Null

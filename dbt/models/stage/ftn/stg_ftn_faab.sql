@@ -92,7 +92,9 @@ ftn_keyed as (
 ),
 
 nfbc_keyed as (
-    select
+    -- Prefer in-season NFBC players so midseason team changes match FTN
+    -- abbreviations. Distinct because the source is one CSV per league.
+    select distinct
         cast(id as varchar) as nfbc_id,
         lower(regexp_replace(
             normalize(replace(
@@ -106,7 +108,7 @@ nfbc_keyed as (
             '[\x{0300}-\x{036F}]', ''
         )) as match_key,
         team as nfbc_team
-    from {{ ref('src_nfbc_players') }}
+    from {{ ref('src_nfbc_in_season_players') }}
 ),
 
 overrides as (
