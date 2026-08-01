@@ -174,8 +174,8 @@ def test_friday_mode_keeps_pitchers_locked_and_uses_weekend_values():
     """Pitchers cannot be moved after Monday; hitters re-optimize on Fri-Sun."""
     monday_pitchers = [pitcher(10, 40.0)]
     players = [
-        hitter(1, ["OF"], 30.0, dollars_friday_sunday=2.0),
-        hitter(2, ["OF"], 10.0, dollars_friday_sunday=25.0),
+        hitter(1, ["OF"], 30.0, dollars_monday_thursday=30.0, dollars_friday_sunday=2.0),
+        hitter(2, ["OF"], 10.0, dollars_monday_thursday=10.0, dollars_friday_sunday=25.0),
         pitcher(11, 99.0),  # would out-earn the locked arm, must be ignored
     ]
 
@@ -193,6 +193,28 @@ def test_friday_mode_keeps_pitchers_locked_and_uses_weekend_values():
     assert starters["OF"] == 2  # weekend value flips the hitter
     assert starters["P"] == 10  # Monday lock carried through
     assert all(p["row_type"] == "hitter" for p in friday.bench)
+
+
+def test_monday_mode_uses_mon_thu_dollars_not_full_week():
+    players = [
+        hitter(1, ["OF"], 50.0, dollars_monday_thursday=5.0),
+        hitter(2, ["OF"], 10.0, dollars_monday_thursday=40.0),
+        pitcher(11, 20.0),
+    ]
+    result = optimize_week(players, {"OF": 1, "P": 1}, mode="monday")
+    assert result.starter_keys() == {(2, "hitter"), (11, "pitcher")}
+    assert result.total_score == pytest.approx(60.0)
+
+
+def test_monday_weighted_prefers_mt_components():
+    players = [
+        hitter(1, ["OF"], 1.0, dollars_monday_thursday=1.0, sb=10.0, mt_sb=0.0),
+        hitter(2, ["OF"], 1.0, dollars_monday_thursday=1.0, sb=0.0, mt_sb=8.0),
+    ]
+    result = optimize_week(
+        players, {"OF": 1}, mode="monday", weights={"sb": 1.0}
+    )
+    assert result.starter_ids() == {2}
 
 
 def test_friday_injury_swaps_in_the_next_best_bat():

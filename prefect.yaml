@@ -94,12 +94,15 @@ deployments:
   - name: razzball-weekly-managed
     entrypoint: flows/razzball_weekly.py:razzball_weekly
     description: >-
-      Razzball weekly hitting + pitching projections (#47). Sat/Sun/Mon at
-      8 AM, 12 PM, 4 PM, and 8 PM ET.
+      Razzball weekly hitting + pitching + Mon–Thu hitting (#47, #210).
+      Sat/Sun/Mon at 8 AM, 12 PM, 4 PM, and 8 PM ET. Mon–Thu is folded into
+      this deployment to stay within the Prefect Cloud Hobby deployment cap
+      (no separate Mon–Thu deployment).
     parameters:
       aws_credentials_block: fbb-aws
       include_weekly_hitting: true
       include_weekly_pitching: true
+      include_monday_thursday_hitting: true
       include_weekend_hitting: false
     schedules:
       - cron: "0 8,12,16,20 * * 0,1,6"
@@ -122,6 +125,7 @@ deployments:
       aws_credentials_block: fbb-aws
       include_weekly_hitting: false
       include_weekly_pitching: false
+      include_monday_thursday_hitting: false
       include_weekend_hitting: true
     schedules:
       - cron: "0 8,12,16,20 * * 4,5"

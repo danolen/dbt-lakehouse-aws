@@ -1,4 +1,4 @@
-"""Razzball weekly + weekend projections Prefect flow (ticket #47).
+"""Razzball weekly / Mon–Thu / weekend projections Prefect flow (#47, #210).
 
 Subscriber pages expose a client-side "Get CSV" button (TableSorter output
 widget). There is no server CSV URL — the flow fetches each page HTML and
@@ -7,6 +7,7 @@ parses table ``#neorazzstatstable`` into CSV (same data as the button).
 Uploads:
     s3://dn-lakehouse-dev/razzball/projections/weekly/hitting/hittertron.csv
     s3://dn-lakehouse-dev/razzball/projections/weekly/pitching/streamonator.csv
+    s3://dn-lakehouse-dev/razzball/projections/weekly/monday_thursday_hitting/hittertron.csv
     s3://dn-lakehouse-dev/razzball/projections/weekly/weekend_hitting/hittertron.csv
 
 Auth uses the Razzball WordPress session from AWS Secrets Manager
@@ -52,6 +53,9 @@ DEFAULT_S3_WEEKLY_PITCHING = (
 )
 DEFAULT_S3_WEEKEND_HITTING = (
     "s3://dn-lakehouse-dev/razzball/projections/weekly/weekend_hitting"
+)
+DEFAULT_S3_MONDAY_THURSDAY_HITTING = (
+    "s3://dn-lakehouse-dev/razzball/projections/weekly/monday_thursday_hitting"
 )
 DEFAULT_SECRET_NAME = "fantasy-baseball-platform"
 DEFAULT_SECRET_REGION = "us-east-1"
@@ -168,6 +172,42 @@ EXPECTED_WEEKEND_HITTING_HEADER = (
     "RazzID",
     "NFBCID",
 )
+# Mon–Thu page mirrors weekend layout; Away replaces AG, Mon/MON ST% replace Fri.
+EXPECTED_MONDAY_THURSDAY_HITTING_HEADER = (
+    "#",
+    "Name",
+    "B",
+    "Team",
+    "Mon",
+    "MON ST%",
+    "Opp",
+    "SP",
+    "#G",
+    "HG",
+    "Away",
+    "vR",
+    "vL",
+    "ESPN",
+    "Y!",
+    "$",
+    "G",
+    "PA",
+    "AB",
+    "H",
+    "R",
+    "HR",
+    "RBI",
+    "SB",
+    "BB",
+    "SO",
+    "AVG",
+    "OBP",
+    "SLG",
+    "OPS",
+    "R%",
+    "RazzID",
+    "NFBCID",
+)
 
 
 class RazzballAuthError(Exception):
@@ -208,6 +248,13 @@ PROJECTION_TARGETS: dict[str, ProjectionTarget] = {
         filename="hittertron.csv",
         s3_base_path=DEFAULT_S3_WEEKEND_HITTING,
         expected_header=EXPECTED_WEEKEND_HITTING_HEADER,
+    ),
+    "monday_thursday_hitting": ProjectionTarget(
+        slug="monday_thursday_hitting",
+        page_url="https://razzball.com/hittertron-nextmonday-thursday/",
+        filename="hittertron.csv",
+        s3_base_path=DEFAULT_S3_MONDAY_THURSDAY_HITTING,
+        expected_header=EXPECTED_MONDAY_THURSDAY_HITTING_HEADER,
     ),
 }
 
@@ -446,10 +493,11 @@ def razzball_weekly(
     include_weekly_hitting: bool = True,
     include_weekly_pitching: bool = True,
     include_weekend_hitting: bool = True,
+    include_monday_thursday_hitting: bool = True,
     aws_credentials_block: str | None = None,
     dry_run: bool = False,
 ) -> dict:
-    """Download Razzball weekly/weekend projection CSVs and upload to S3."""
+    """Download Razzball weekly/Mon–Thu/weekend projection CSVs and upload to S3."""
     logger = get_run_logger()
     stamp = partition_stamp()
 
@@ -466,6 +514,7 @@ def razzball_weekly(
         "weekly_hitting": include_weekly_hitting,
         "weekly_pitching": include_weekly_pitching,
         "weekend_hitting": include_weekend_hitting,
+        "monday_thursday_hitting": include_monday_thursday_hitting,
     }
     if not any(slice_flags.values()):
         raise ValueError("At least one projection slice must be enabled")
@@ -538,6 +587,11 @@ if __name__ == "__main__":
         help="Fetch only weekend hitting (hittertron-nextfriday-sunday).",
     )
     parser.add_argument(
+        "--monday-thursday-hitting-only",
+        action="store_true",
+        help="Fetch only Mon–Thu hitting (hittertron-nextmonday-thursday).",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print planned downloads/uploads instead of calling Razzball/AWS.",
@@ -548,32 +602,39 @@ if __name__ == "__main__":
         args.weekly_hitting_only,
         args.weekly_pitching_only,
         args.weekend_hitting_only,
+        args.monday_thursday_hitting_only,
     )
     if sum(only_flags) > 1:
-        parser.error("Use at most one of --weekly-*-only / --weekend-hitting-only")
+        parser.error(
+            "Use at most one of --weekly-*-only / --weekend-hitting-only / "
+            "--monday-thursday-hitting-only"
+        )
 
     if args.weekly_hitting_only:
-        include_weekly_hitting, include_weekly_pitching, include_weekend_hitting = (
-            True,
-            False,
-            False,
-        )
+        include_weekly_hitting = True
+        include_weekly_pitching = False
+        include_weekend_hitting = False
+        include_monday_thursday_hitting = False
     elif args.weekly_pitching_only:
-        include_weekly_hitting, include_weekly_pitching, include_weekend_hitting = (
-            False,
-            True,
-            False,
-        )
+        include_weekly_hitting = False
+        include_weekly_pitching = True
+        include_weekend_hitting = False
+        include_monday_thursday_hitting = False
     elif args.weekend_hitting_only:
-        include_weekly_hitting, include_weekly_pitching, include_weekend_hitting = (
-            False,
-            False,
-            True,
-        )
+        include_weekly_hitting = False
+        include_weekly_pitching = False
+        include_weekend_hitting = True
+        include_monday_thursday_hitting = False
+    elif args.monday_thursday_hitting_only:
+        include_weekly_hitting = False
+        include_weekly_pitching = False
+        include_weekend_hitting = False
+        include_monday_thursday_hitting = True
     else:
         include_weekly_hitting = True
         include_weekly_pitching = True
         include_weekend_hitting = True
+        include_monday_thursday_hitting = True
 
     print(
         razzball_weekly(
@@ -582,6 +643,7 @@ if __name__ == "__main__":
             include_weekly_hitting=include_weekly_hitting,
             include_weekly_pitching=include_weekly_pitching,
             include_weekend_hitting=include_weekend_hitting,
+            include_monday_thursday_hitting=include_monday_thursday_hitting,
             aws_credentials_block=args.aws_credentials_block,
             dry_run=args.dry_run,
         )
