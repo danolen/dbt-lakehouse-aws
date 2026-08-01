@@ -70,3 +70,15 @@ variable "ingest_deny_prefixes" {
     "mapping",
   ]
 }
+
+variable "platform_secret_name" {
+  description = <<-EOT
+    AWS Secrets Manager secret agents may GetSecretValue on (read-only).
+    Used so issue scripts can load gh_pat_issue_and_script_work without a
+    separate GH_PAT in Cursor secrets. IAM cannot scope to a single JSON key —
+    agents can read every key in this secret blob (vendor cookies included).
+    Prefer a dedicated PAT-only secret later if that blast radius is too wide.
+  EOT
+  type        = string
+  default     = "fantasy-baseball-platform"
+}

@@ -27,7 +27,7 @@ Related: epic [#154](https://github.com/danolen/fantasy-baseball-platform/issues
 | In-season Streamlit | IAM user `streamlit-inseason-tool` | Same Athena/Glue/S3 as draft; **no** DynamoDB | Streamlit Secrets → that user's access keys only |
 | GHA MPD ingest | OIDC role (default name `github-actions-mpd-player-map-ingest`) | `s3:PutObject` on `mapping/mpd_player_id_map/*` only | GitHub Actions OIDC (no long-lived AWS keys) |
 | GHA dbt freshness | OIDC role (default name `github-actions-dbt-source-freshness`) | Athena/Glue read; lakehouse read; Athena results prefix R/W | GitHub Actions OIDC |
-| Cursor Cloud Agent (Athena/dbt) | IAM user `cursor-agent-dbt-debug` (`/agents/`) | Athena query on workgroup `cursor-agent` only (1 GiB/query ceiling); Glue Get* everywhere; Glue table CUD **only** on `dbt_agent`; S3 read lakehouse; S3 R/W `dbt_agent/` + agent results prefix; **deny** Glue mutate `dbt_main` and S3 write on ingest prefixes | Cursor Cloud Agent secrets → that user's access keys only |
+| Cursor Cloud Agent (Athena/dbt) | IAM user `cursor-agent-dbt-debug` (`/agents/`) | Athena query on workgroup `cursor-agent` only (1 GiB/query ceiling); Glue Get* everywhere; Glue table CUD **only** on `dbt_agent`; S3 read lakehouse; S3 R/W `dbt_agent/` + agent results prefix; **deny** Glue mutate `dbt_main` and S3 write on ingest prefixes; `secretsmanager:GetSecretValue` on `fantasy-baseball-platform` only (for issue PAT; whole JSON blob readable) | Cursor Cloud Agent secrets → that user's access keys only |
 | Prefect ingest flows | Prefect `AwsCredentials` block / future ECS task role | S3 put on vendor ingest prefixes; `secretsmanager:GetSecretValue` on `fantasy-baseball-platform` | Prefect block + AWS SM |
 | Maintainer admin | Personal IAM user / SSO (break-glass) | Full account as needed for Terraform, IAM, debugging | `~/.aws` / SSO — **never** paste into Streamlit or agent secrets |
 | Cursor Cloud Agent (GitHub) | GitHub App installation token + optional fine-grained PAT | Feature branches / PRs (integration); Issues create/label/edit via PAT | See [Agent GitHub access](#agent-github-access) |
@@ -141,10 +141,12 @@ Verified 2026-07-16 (`scripts/verify_gh_issue_pat.py` → probe #173) as part of
 
 Details: [`scripts/README.md`](../scripts/README.md).
 
-**AWS on agent VMs:** never install maintainer admin / SSO credentials. When
-Athena/dbt debug is needed, use only the least-privilege
-`cursor-agent-dbt-debug` keys documented above (`--target agent`, schema
-`dbt_agent`, workgroup `cursor-agent`). Infra changes (IAM, Glue DDL outside
+**AWS on agent VMs:** never install maintainer admin / SSO credentials. Use only
+the least-privilege `cursor-agent-dbt-debug` keys documented above
+(`--target agent`, schema `dbt_agent`, workgroup `cursor-agent`). Those keys
+may also `GetSecretValue` on `fantasy-baseball-platform` so issue scripts can
+load `gh_pat_issue_and_script_work` (IAM cannot limit to one JSON key — the
+whole secret blob is readable). Infra changes (IAM, Glue DDL outside
 `dbt_agent`, Terraform apply) remain maintainer-applied per `AGENTS.md`.
 
 ---
@@ -271,3 +273,4 @@ should wait on CI. Use bypass only for truly small changes.
 | Adopt GitHub Environments for GHA OIDC | #168 |
 | Optional CloudWatch alarm on agent workgroup bytes scanned | follow-up to #198 |
 | GHA PR `dbt build` via OIDC (near-term unblock alternative) | follow-up to #198 §5 |
+| Split GitHub PAT into its own Secrets Manager secret (narrower than full platform blob) | follow-up to #198 / #152 |
