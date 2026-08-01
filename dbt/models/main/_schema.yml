@@ -162,7 +162,13 @@ models:
       category-stat/points distributions. Grain is one row per contest,
       snapshot, team, and category. Primary signals are local marginal
       slope (±25 points), nearest point islands, and the 10/25/50/100
-      raw-stat ladder. Filter is_latest_snapshot for current decisions.
+      raw-stat ladder. When a team sits near the top/bottom of a category
+      and the preferred ±25 window does not exist, the missing anchor is
+      clamped to the field extreme and slope_is_clamped is true rather
+      than nulling the slope (#205). headroom_status distinguishes open /
+      partial / maxed upside. Filter is_latest_snapshot for current
+      decisions. Weight player projections with overall_points_per_raw_unit
+      (do not invert raw_per_category_point in consumers).
     columns:
       - name: contest_key
         data_tests:
@@ -191,7 +197,31 @@ models:
       - name: is_ratio
         data_tests:
           - not_null
+      - name: headroom_status
+        description: >-
+          Upside headroom relative to the field: open (full ±window
+          available), partial (some teams above but less than the slope
+          window), maxed (no team above — stop spending here, not missing
+          data).
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['open', 'partial', 'maxed']
       - name: slope_window_points
+        data_tests:
+          - not_null
+      - name: slope_is_clamped
+        description: >-
+          True when the preferred ±slope_window_points band was unavailable
+          on either side and the missing anchor was clamped to the field
+          extreme (or the team's own position when already at that extreme).
+        data_tests:
+          - not_null
+      - name: slope_up_is_clamped
+        data_tests:
+          - not_null
+      - name: slope_down_is_clamped
         data_tests:
           - not_null
       - name: raw_gap_up_10
@@ -202,10 +232,56 @@ models:
         description: Favorable raw units needed to gain ~50 category points.
       - name: raw_gap_up_100
         description: Favorable raw units needed to gain ~100 category points.
+      - name: ladder_up_status_10
+        description: "ok | clamped | maxed for the +10 upside rung."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['ok', 'clamped', 'maxed']
+      - name: ladder_up_status_25
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['ok', 'clamped', 'maxed']
+      - name: ladder_up_status_50
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['ok', 'clamped', 'maxed']
+      - name: ladder_up_status_100
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['ok', 'clamped', 'maxed']
       - name: raw_per_category_point
         description: >-
           Local density: favorable raw units per category point across the
-          ±slope_window_points band.
+          ±slope_window_points band (or the clamped one-sided band at the
+          field edge). Non-null for latest snapshots in multi-team contests.
+        data_tests:
+          - not_null:
+              config:
+                where: "is_latest_snapshot"
+      - name: raw_unit_size
+        description: >-
+          Decision unit for overall_points_per_raw_unit: 1 for counting
+          categories, 0.001 for AVG, 0.01 for ERA, 0.005 for WHIP.
+        data_tests:
+          - not_null
+      - name: overall_points_per_raw_unit
+        description: >-
+          Reciprocal of raw_per_category_point scaled by raw_unit_size.
+          Multiply a projected raw delta by this to estimate overall-point
+          impact. Prefer this column over inverting raw_per_category_point
+          in consumers.
+        data_tests:
+          - not_null:
+              config:
+                where: "is_latest_snapshot"
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
