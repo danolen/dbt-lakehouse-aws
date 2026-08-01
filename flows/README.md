@@ -9,7 +9,7 @@ the architecture decisions (control plane, work pool, cost) behind this package.
 | `nfbc_in_season.py` | NFBC in-season players → `s3://dn-lakehouse-dev/nfbc/in-season-players/…` (#44) plus league + overall standings → `s3://dn-lakehouse-dev/nfbc/in-season-standings/{league,overall}/…` (#119). |
 | `fangraphs_ros.py` | FanGraphs ROS projections → `s3://dn-lakehouse-dev/fangraphs/projections/rest-of-season/…` (ticket #45). |
 | `ftn_faab.py` | FTN FAAB recommendations → `s3://dn-lakehouse-dev/ftn/faab/…` (ticket #46). |
-| `razzball_weekly.py` | Razzball weekly + weekend projections → `s3://dn-lakehouse-dev/razzball/projections/weekly/…` (ticket #47). |
+| `razzball_weekly.py` | Razzball weekly + Mon–Thu + weekend projections → `s3://dn-lakehouse-dev/razzball/projections/weekly/…` (tickets #47, #210). |
 | `pyproject.toml` | Package + pinned deps (`prefect` 3.x, `prefect-aws`, `boto3`, `requests`). |
 | `Dockerfile` | Image for the ECS / self-hosted execution paths. |
 
@@ -98,15 +98,16 @@ stored cookies — refresh failure alone is not fatal until a download fails.
 **Schedule (Prefect deployment):** Saturdays and Sundays at 8:00 AM
 `America/New_York`. S3 date partitions use `America/New_York`.
 
-## Razzball weekly flow (#47)
+## Razzball weekly flow (#47, #210)
 
-**Scope:** weekly hitting, weekly pitching, and weekend hitting projections.
-There is no weekend pitching export.
+**Scope:** weekly hitting, weekly pitching, Mon–Thu hitting, and weekend
+hitting projections. There is no weekend or Mon–Thu pitching export.
 
 | Slice | Page | S3 prefix | Filename |
 |-------|------|-----------|----------|
 | Weekly hitting | [hittertron-nextweek](https://razzball.com/hittertron-nextweek/) | `razzball/projections/weekly/hitting/` | `hittertron.csv` |
 | Weekly pitching | [streamers-nextweek](https://razzball.com/streamers-nextweek/) | `razzball/projections/weekly/pitching/` | `streamonator.csv` |
+| Mon–Thu hitting | [hittertron-nextmonday-thursday](https://razzball.com/hittertron-nextmonday-thursday/) | `razzball/projections/weekly/monday_thursday_hitting/` | `hittertron.csv` |
 | Weekend hitting | [hittertron-nextfriday-sunday](https://razzball.com/hittertron-nextfriday-sunday/) | `razzball/projections/weekly/weekend_hitting/` | `hittertron.csv` |
 
 Razzball has no server CSV URL — the on-page **Get CSV** button serializes
@@ -128,11 +129,25 @@ Analytics / Cloudflare cookies are not required.
 
 | Deployment | Slices | Cron (America/New_York) |
 |------------|--------|-------------------------|
-| `razzball-weekly-managed` | weekly hitting + pitching | 8 AM, 12 PM, 4 PM, 8 PM on Sat, Sun, Mon |
+| `razzball-weekly-managed` | weekly hitting + pitching + Mon–Thu hitting | 8 AM, 12 PM, 4 PM, 8 PM on Sat, Sun, Mon |
 | `razzball-weekend-managed` | weekend hitting only | 8 AM, 12 PM, 4 PM, 8 PM on Thu, Fri |
 
+Mon–Thu is folded into the weekly deployment (not a third scheduled
+deployment) to stay within the Prefect Cloud Hobby deployment cap. For a
+midweek Mon–Thu-only refresh, run:
+
+```bash
+python flows/razzball_weekly.py --monday-thursday-hitting-only
+# or
+prefect deployment run "razzball-weekly/razzball-weekly-managed" \
+  --param include_weekly_hitting=false \
+  --param include_weekly_pitching=false \
+  --param include_monday_thursday_hitting=true \
+  --param include_weekend_hitting=false
+```
+
 CLI flags: `--weekly-hitting-only`, `--weekly-pitching-only`,
-`--weekend-hitting-only`.
+`--monday-thursday-hitting-only`, `--weekend-hitting-only`.
 
 ## NFBC in-season flow (#44, #119)
 

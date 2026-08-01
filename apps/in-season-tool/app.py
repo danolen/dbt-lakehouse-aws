@@ -465,7 +465,7 @@ with tab_lineup:
         "Lineup window",
         options=["monday", "friday"],
         format_func=lambda m: (
-            "Monday lock (full week, hitters + pitchers)"
+            "Monday lock (Mon–Thu hitters + week pitchers)"
             if m == "monday"
             else "Friday swap (hitters only, Fri–Sun)"
         ),
@@ -763,7 +763,8 @@ with tab_lineup:
             "projections in the same pass.\n"
             "- **Monday lock vs Friday swap**: NFBC locks pitchers for the "
             "whole week on Monday and permits hitter-only swaps on Friday. "
-            "The Friday view re-optimizes hitters on Fri–Sun projections and "
+            "Monday scores hitters on Mon–Thu dollars (pitchers still use "
+            "weekly $). Friday re-optimizes hitters on Fri–Sun projections and "
             "carries the Monday pitcher set through unchanged.\n"
             "- **Ratio totals** come from aggregated numerators and "
             "denominators (H/AB, ER/IP, (H+BB)/IP).\n"

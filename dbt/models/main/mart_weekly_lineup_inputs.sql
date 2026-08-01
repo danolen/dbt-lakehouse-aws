@@ -73,7 +73,7 @@ hitters as (
         b.ros_value,
         b.opps,
 
-        -- Hitter component projections
+        -- Hitter component projections (full week)
         cast(b.hit_g as double) as hit_g,
         cast(b.pa as double) as pa,
         cast(b.ab as double) as ab,
@@ -85,6 +85,27 @@ hitters as (
         cast(b.bb as double) as bb,
         cast(b.so as double) as so,
         cast(b.batting_avg as double) as batting_avg,
+
+        -- Mon–Thu components for Monday lock (#210)
+        cast(b.has_monday_thursday_hitting as boolean) as has_monday_thursday_hitting,
+        cast(b.mt_num_g as int) as mt_num_g,
+        cast(b.mt_home_games as int) as mt_home_games,
+        cast(b.mt_away_games as int) as mt_away_games,
+        cast(b.mt_vs_rhp as int) as mt_vs_rhp,
+        cast(b.mt_vs_lhp as int) as mt_vs_lhp,
+        b.mt_opp,
+        b.mt_sp,
+        cast(b.mt_hit_g as double) as mt_hit_g,
+        cast(b.mt_pa as double) as mt_pa,
+        cast(b.mt_ab as double) as mt_ab,
+        cast(b.mt_hits as double) as mt_hits,
+        cast(b.mt_r as double) as mt_r,
+        cast(b.mt_hr as double) as mt_hr,
+        cast(b.mt_rbi as double) as mt_rbi,
+        cast(b.mt_sb as double) as mt_sb,
+        cast(b.mt_bb as double) as mt_bb,
+        cast(b.mt_so as double) as mt_so,
+        cast(b.mt_batting_avg as double) as mt_batting_avg,
 
         -- Pitcher fields null on hitter rows
         cast(null as varchar) as pitcher_pos,
@@ -172,6 +193,26 @@ pitchers as (
         cast(null as double) as bb,
         cast(null as double) as so,
         cast(null as double) as batting_avg,
+
+        cast(null as boolean) as has_monday_thursday_hitting,
+        cast(null as int) as mt_num_g,
+        cast(null as int) as mt_home_games,
+        cast(null as int) as mt_away_games,
+        cast(null as int) as mt_vs_rhp,
+        cast(null as int) as mt_vs_lhp,
+        cast(null as varchar) as mt_opp,
+        cast(null as varchar) as mt_sp,
+        cast(null as double) as mt_hit_g,
+        cast(null as double) as mt_pa,
+        cast(null as double) as mt_ab,
+        cast(null as double) as mt_hits,
+        cast(null as double) as mt_r,
+        cast(null as double) as mt_hr,
+        cast(null as double) as mt_rbi,
+        cast(null as double) as mt_sb,
+        cast(null as double) as mt_bb,
+        cast(null as double) as mt_so,
+        cast(null as double) as mt_batting_avg,
 
         b.pitcher_pos,
         b.pitcher_opp,
