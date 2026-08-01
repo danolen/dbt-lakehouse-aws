@@ -4,7 +4,9 @@ models:
   - name: mart_faab_worksheet
     description: >-
       FAAB worksheet rows per league. Grain is (league, nfbc_id) for matched
-      players; FTN-only rows may have null nfbc_id, so uniqueness uses player.
+      players. FTN-only rows may have null nfbc_id; those are unique on
+      (league, player). Homonyms (e.g. two Max Muncys) share a display name
+      but different nfbc_ids.
     columns:
       - name: league
         data_tests:
@@ -17,11 +19,22 @@ models:
         data_tests:
           - not_null
     data_tests:
+      # Matched / weekly rows: identity is NFBC id (handles name collisions).
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - league
+              - nfbc_id
+          config:
+            where: "nfbc_id is not null"
+      # FTN-only unmatched rows: no nfbc_id, so fall back to display name.
       - dbt_utils.unique_combination_of_columns:
           arguments:
             combination_of_columns:
               - league
               - player
+          config:
+            where: "nfbc_id is null"
 
   - name: mart_weekly_lineup_inputs
     description: >-
