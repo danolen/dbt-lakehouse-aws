@@ -22,3 +22,6 @@ ingest_deny_prefixes = [
   "ftn",
   "mapping",
 ]
+
+# Issue-script PAT lives here (JSON key gh_pat_issue_and_script_work).
+platform_secret_name = "fantasy-baseball-platform"

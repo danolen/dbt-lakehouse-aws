@@ -8,7 +8,7 @@ Cursor Cloud Agents can run narrow `dbt build` / `dbt show` against a
 | Resource | Default name | Purpose |
 |----------|--------------|---------|
 | IAM user | `cursor-agent-dbt-debug` (`/agents/`) | Agent AWS principal |
-| IAM managed policy | `cursor-agent-dbt-debug` | Attached permissions (managed policy — inline user policies are capped at 2 KiB) |
+| IAM managed policy | `cursor-agent-dbt-debug` | Attached permissions (managed policy — inline user policies are capped at 2 KiB); includes read-only `GetSecretValue` on `fantasy-baseball-platform` for the issue PAT |
 | Athena workgroup | `cursor-agent` | Enforced 1 GiB/query scan limit + dedicated results prefix |
 | Glue database | `dbt_agent` | Only schema agents may Create/Update/Delete tables in |
 | S3 data prefix | `dbt_agent/` | Iceberg/dbt object writes |
@@ -74,6 +74,12 @@ Paste into the Cursor Cloud / agent secrets for this repo (names only in
 | `ATHENA_S3_DATA_DIR` | `terraform output -raw athena_s3_data_dir` |
 
 Do **not** put maintainer admin / SSO credentials on agent VMs.
+
+The same IAM user can `GetSecretValue` on Secrets Manager secret
+`fantasy-baseball-platform` so issue scripts keep loading
+`gh_pat_issue_and_script_work` without a separate `GH_PAT` in Cursor secrets.
+IAM cannot scope to one JSON key — agents can read the whole blob (including
+vendor cookies). No Secrets Manager write is granted.
 
 ### E. Smoke tests (record on #198)
 

@@ -13,6 +13,11 @@ output "iam_policy_arn" {
   value       = aws_iam_policy.agent.arn
 }
 
+output "platform_secret_arn" {
+  description = "Secrets Manager secret ARN the agent may GetSecretValue (issue PAT + other JSON keys in the blob)."
+  value       = data.aws_secretsmanager_secret.platform.arn
+}
+
 output "workgroup_name" {
   description = "Athena workgroup agents must use (ATHENA_WORKGROUP)."
   value       = aws_athena_workgroup.cursor_agent.name

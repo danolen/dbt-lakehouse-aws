@@ -1,5 +1,9 @@
 data "aws_caller_identity" "current" {}
 
+data "aws_secretsmanager_secret" "platform" {
+  name = var.platform_secret_name
+}
+
 locals {
   account_id = data.aws_caller_identity.current.account_id
 
@@ -213,6 +217,18 @@ data "aws_iam_policy_document" "agent" {
       for p in var.ingest_deny_prefixes :
       "arn:aws:s3:::${var.s3_bucket}/${trim(p, "/")}/*"
     ]
+  }
+
+  # Read-only: issue-script fine-grained GitHub PAT (and other JSON keys in the
+  # same blob — IAM cannot scope to one key). No Put/Update/DeleteSecret.
+  statement {
+    sid    = "ReadPlatformSecret"
+    effect = "Allow"
+    actions = [
+      "secretsmanager:GetSecretValue",
+      "secretsmanager:DescribeSecret",
+    ]
+    resources = [data.aws_secretsmanager_secret.platform.arn]
   }
 }
 
