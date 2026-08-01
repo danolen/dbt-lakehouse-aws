@@ -4,10 +4,16 @@
     )
 }}
 
--- Overall-contest category mobility from actual cutlines (#183).
+-- Overall-contest category mobility from actual cutlines (#183, #205).
 -- Primary signals: local marginal slope (±25 category points), nearest
--- distinct point islands, and raw-stat gaps to the 10/25/50/100 ladder.
+-- distinct point islands, and the 10/25/50/100 ladder.
 -- Optional +1/+5 probes are included for density inspection only.
+--
+-- #205: when a team sits near the top/bottom of a category, the preferred
+-- ±25 window may not exist. Clamp the missing anchor to the field extreme
+-- and flag slope_is_clamped rather than returning NULL. Ladder rungs beyond
+-- remaining headroom are 'clamped' (partial headroom) or 'maxed' (none).
+-- overall_points_per_raw_unit is the reciprocal consumers need for weighting.
 
 {% set slope_window = 25 %}
 {% set ladder_deltas = [1, 5, 10, 25, 50, 100] %}
@@ -61,6 +67,47 @@ thresholds as (
     from point_levels
 ),
 
+field_extrema as (
+    select
+        contest_key,
+        snapshot_date,
+        category,
+        max(target_points) as field_max_points,
+        min(target_points) as field_min_points
+    from thresholds
+    group by contest_key, snapshot_date, category
+),
+
+field_max_thr as (
+    select
+        t.contest_key,
+        t.snapshot_date,
+        t.category,
+        t.target_points as field_max_points,
+        t.raw_needed as field_max_raw
+    from thresholds t
+    inner join field_extrema fe
+        on t.contest_key = fe.contest_key
+        and t.snapshot_date = fe.snapshot_date
+        and t.category = fe.category
+        and t.target_points = fe.field_max_points
+),
+
+field_min_thr as (
+    select
+        t.contest_key,
+        t.snapshot_date,
+        t.category,
+        t.target_points as field_min_points,
+        t.raw_needed as field_min_raw
+    from thresholds t
+    inner join field_extrema fe
+        on t.contest_key = fe.contest_key
+        and t.snapshot_date = fe.snapshot_date
+        and t.category = fe.category
+        and t.target_points = fe.field_min_points
+),
+
 nearest_above as (
     select
         b.contest_key,
@@ -108,7 +155,7 @@ ladder_targets as (
     ) d
 ),
 
-ladder_up as (
+ladder_up_preferred as (
     select
         lt.contest_key,
         lt.snapshot_date,
@@ -164,14 +211,48 @@ ladder_down as (
 ),
 
 ladder_up_best as (
-    select * from ladder_up where rn = 1
+    -- Prefer an island at the requested rung; otherwise clamp to the field
+    -- max when any headroom remains; otherwise mark maxed (no headroom).
+    select
+        lt.contest_key,
+        lt.snapshot_date,
+        lt.team_key,
+        lt.category,
+        lt.delta_points,
+        case
+            when pref.cutline_points is not null then pref.cutline_points
+            when fm.field_max_points > lt.category_points then fm.field_max_points
+            else null
+        end as cutline_points,
+        case
+            when pref.cutline_raw is not null then pref.cutline_raw
+            when fm.field_max_points > lt.category_points then fm.field_max_raw
+            else null
+        end as cutline_raw,
+        case
+            when pref.cutline_points is not null then 'ok'
+            when fm.field_max_points > lt.category_points then 'clamped'
+            else 'maxed'
+        end as ladder_up_status
+    from ladder_targets lt
+    left join ladder_up_preferred pref
+        on lt.contest_key = pref.contest_key
+        and lt.snapshot_date = pref.snapshot_date
+        and lt.team_key = pref.team_key
+        and lt.category = pref.category
+        and lt.delta_points = pref.delta_points
+        and pref.rn = 1
+    left join field_max_thr fm
+        on lt.contest_key = fm.contest_key
+        and lt.snapshot_date = fm.snapshot_date
+        and lt.category = fm.category
 ),
 
 ladder_down_best as (
     select * from ladder_down where rn = 1
 ),
 
-slope_up as (
+slope_up_preferred as (
     select
         b.contest_key,
         b.snapshot_date,
@@ -191,7 +272,7 @@ slope_up as (
         and t.target_points >= b.category_points + {{ slope_window }}
 ),
 
-slope_down as (
+slope_down_preferred as (
     select
         b.contest_key,
         b.snapshot_date,
@@ -218,14 +299,45 @@ enriched as (
         ta.raw_needed as raw_above,
         nb.points_below,
         tb.raw_needed as raw_below,
-        su.slope_up_points,
-        su.slope_up_raw,
-        sd.slope_down_points,
-        sd.slope_down_raw
+
+        -- Upper slope anchor: preferred +window, else field max, else own
+        -- position when already at the top (one-sided slope).
+        case
+            when su.slope_up_points is not null then su.slope_up_points
+            when fm.field_max_points > b.category_points then fm.field_max_points
+            else b.category_points
+        end as slope_up_points,
+        case
+            when su.slope_up_raw is not null then su.slope_up_raw
+            when fm.field_max_points > b.category_points then fm.field_max_raw
+            else b.raw_stat
+        end as slope_up_raw,
+        case
+            when su.slope_up_points is not null then false
+            else true
+        end as slope_up_is_clamped,
+
+        -- Lower slope anchor: preferred -window, else field min, else own.
+        case
+            when sd.slope_down_points is not null then sd.slope_down_points
+            when fn.field_min_points < b.category_points then fn.field_min_points
+            else b.category_points
+        end as slope_down_points,
+        case
+            when sd.slope_down_raw is not null then sd.slope_down_raw
+            when fn.field_min_points < b.category_points then fn.field_min_raw
+            else b.raw_stat
+        end as slope_down_raw,
+        case
+            when sd.slope_down_points is not null then false
+            else true
+        end as slope_down_is_clamped
+
         {% for delta in ladder_deltas %}
         ,
         lu{{ delta }}.cutline_points as cutline_points_up_{{ delta }},
         lu{{ delta }}.cutline_raw as cutline_raw_up_{{ delta }},
+        lu{{ delta }}.ladder_up_status as ladder_up_status_{{ delta }},
         ld{{ delta }}.cutline_points as cutline_points_down_{{ delta }},
         ld{{ delta }}.cutline_raw as cutline_raw_down_{{ delta }}
         {% endfor %}
@@ -250,18 +362,26 @@ enriched as (
         and b.snapshot_date = tb.snapshot_date
         and b.category = tb.category
         and nb.points_below = tb.target_points
-    left join slope_up su
+    left join slope_up_preferred su
         on b.contest_key = su.contest_key
         and b.snapshot_date = su.snapshot_date
         and b.team_key = su.team_key
         and b.category = su.category
         and su.rn = 1
-    left join slope_down sd
+    left join slope_down_preferred sd
         on b.contest_key = sd.contest_key
         and b.snapshot_date = sd.snapshot_date
         and b.team_key = sd.team_key
         and b.category = sd.category
         and sd.rn = 1
+    left join field_max_thr fm
+        on b.contest_key = fm.contest_key
+        and b.snapshot_date = fm.snapshot_date
+        and b.category = fm.category
+    left join field_min_thr fn
+        on b.contest_key = fn.contest_key
+        and b.snapshot_date = fn.snapshot_date
+        and b.category = fn.category
     {% for delta in ladder_deltas %}
     left join ladder_up_best lu{{ delta }}
         on b.contest_key = lu{{ delta }}.contest_key
@@ -291,8 +411,17 @@ calc as (
             when higher_is_better then raw_stat - raw_below
             else raw_below - raw_stat
         end as raw_gap_below,
+
+        (slope_up_is_clamped or slope_down_is_clamped) as slope_is_clamped,
+
         case
-            when slope_up_raw is null or slope_down_raw is null then null
+            when points_above is null then 'maxed'
+            when slope_up_is_clamped then 'partial'
+            else 'open'
+        end as headroom_status,
+
+        case
+            when slope_up_points = slope_down_points then null
             when higher_is_better then
                 (slope_up_raw - slope_down_raw)
                 / nullif(cast(slope_up_points - slope_down_points as double), 0)
@@ -300,6 +429,7 @@ calc as (
                 (slope_down_raw - slope_up_raw)
                 / nullif(cast(slope_up_points - slope_down_points as double), 0)
         end as raw_per_category_point
+
         {% for delta in ladder_deltas %}
         ,
         case
@@ -314,6 +444,29 @@ calc as (
         end as raw_gap_down_{{ delta }}
         {% endfor %}
     from enriched
+),
+
+with_units as (
+    select
+        calc.*,
+        case
+            when category = 'AVG' then 0.001
+            when category = 'ERA' then 0.01
+            when category = 'WHIP' then 0.005
+            else 1.0
+        end as raw_unit_size,
+        case
+            when raw_per_category_point is null then null
+            else
+                case
+                    when category = 'AVG' then 0.001
+                    when category = 'ERA' then 0.01
+                    when category = 'WHIP' then 0.005
+                    else 1.0
+                end
+                / nullif(raw_per_category_point, 0)
+        end as overall_points_per_raw_unit
+    from calc
 )
 
 select
@@ -349,17 +502,25 @@ select
     raw_below,
     raw_gap_below,
 
+    headroom_status,
+
     {{ slope_window }} as slope_window_points,
     slope_up_points,
     slope_up_raw,
     slope_down_points,
     slope_down_raw,
+    slope_up_is_clamped,
+    slope_down_is_clamped,
+    slope_is_clamped,
     raw_per_category_point,
+    raw_unit_size,
+    overall_points_per_raw_unit,
 
     {% for delta in ladder_deltas %}
     cutline_points_up_{{ delta }},
     cutline_raw_up_{{ delta }},
     raw_gap_up_{{ delta }},
+    ladder_up_status_{{ delta }},
     cutline_points_down_{{ delta }},
     cutline_raw_down_{{ delta }},
     raw_gap_down_{{ delta }}{% if not loop.last %},{% endif %}
@@ -421,4 +582,4 @@ select
         else null
     end as count_equiv_up_100
 
-from calc
+from with_units
