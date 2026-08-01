@@ -4,117 +4,224 @@
     )
 }}
 
--- Per-hitter weekly lineup input data. This mart prepares data; the
--- greedy assignment + MILP optimizer (Phase 1a v1-v3) live in the
--- Streamlit app so we have a single source of truth for optimization
--- logic.
+-- Weekly lineup input surface for expected-lineup optimization (#58).
+-- One row per (league, owner, nfbc_id, row_type). Hitters and pitchers are
+-- separate rows so two-way players (e.g. Ohtani) appear once in each role.
+-- Free agents (empty owner) are included for add/drop what-if simulations.
 --
--- Scope of v1:
---   - Hitters only (pitcher streaming is Phase 1c)
---   - Monday-lock columns (full-week $) are the primary signal; Friday
---     lock columns (weekend file) are added in v2 on a follow-up branch.
---
--- One row per (league, owner, nfbc_id). Free-agent pool is included so
--- the app can offer "what if you add player X" comparisons later.
+-- Component counting stats and ratio numerators/denominators are exposed so
+-- downstream code can aggregate H/AB, ER/IP, and (H+BB)/IP correctly.
+-- Pitcher start metadata (first_start_day, is_two_start) is derived from the
+-- Razzball weekly pitching file and is null-safe when no start is listed.
 
 with league_formats as (
     select
         league,
-        -- ftn_league_size is null for draft-and-hold leagues (nolen_50).
-        -- dbt-athena loads the seed column as integer, so empty CSV cells
-        -- arrive as SQL NULL and no nullif() is needed here.
         cast(ftn_league_size as int) as ftn_league_size,
         format
     from {{ ref('league_config') }}
 ),
 
-hitters as (
+base as (
     select
-        wp.id as nfbc_id,
-        wp.first_name,
-        wp.last_name,
-        wp.pos as pos_raw,
-        wp.team,
-        wp.owner,
-        wp.own_pct,
-        wp.league,
-        wp.week_of,
-        wp.bats,
-        wp.num_g,
-        wp.home_games,
-        wp.away_games,
-        wp.vs_rhp,
-        wp.vs_lhp,
-        wp.dollars,
-        wp.dollars_per_game,
-        wp.dollars_monday_thursday,
-        wp.dollars_friday_sunday,
-        wp.ros_oc,
-        wp.ros_me,
-        wp.ros_50,
-        -- Normalize the comma-separated position string: uppercase, trim
-        -- each token, collapse whitespace. NFBC uses values like
-        -- "1B,OF" or "2B, SS"; we produce array ['1B','OF'] or ['2B','SS'].
+        wp.*,
+        lf.format,
+        lf.ftn_league_size,
         transform(
             split(upper(coalesce(wp.pos, '')), ','),
             p -> trim(p)
-        ) as pos_array
+        ) as pos_array,
+        cast(
+            case lf.format
+                when 'oc' then wp.ros_oc
+                when 'me' then wp.ros_me
+                when '50s' then wp.ros_50
+            end as double
+        ) as ros_value
     from {{ ref('mart_weekly_projections') }} wp
-    -- Require weekly hitting projection data. num_g populates only from
-    -- the Razzball weekly hitting file, so this is the cleanest hitter
-    -- filter available without re-joining source tables.
-    where wp.num_g is not null
+    inner join league_formats lf
+        on wp.league = lf.league
+),
+
+hitters as (
+    select
+        b.league,
+        b.format,
+        b.ftn_league_size,
+        b.owner,
+        cast(b.own_pct as int) as own_pct,
+        b.id as nfbc_id,
+        trim(b.first_name) as first_name,
+        trim(b.last_name) as last_name,
+        concat(trim(b.first_name), ' ', trim(b.last_name)) as player_name,
+        b.team,
+        b.pos as pos_raw,
+        b.pos_array,
+        b.bats,
+        b.week_of,
+        'hitter' as row_type,
+
+        cast(b.num_g as int) as num_g,
+        cast(b.home_games as int) as home_games,
+        cast(b.away_games as int) as away_games,
+        cast(b.vs_rhp as int) as vs_rhp,
+        cast(b.vs_lhp as int) as vs_lhp,
+        cast(b.dollars as double) as dollars,
+        cast(b.dollars_per_game as double) as dollars_per_game,
+        cast(b.dollars_monday_thursday as double) as dollars_monday_thursday,
+        cast(b.dollars_friday_sunday as double) as dollars_friday_sunday,
+        b.ros_value,
+        b.opps,
+
+        -- Hitter component projections
+        cast(b.hit_g as double) as hit_g,
+        cast(b.pa as double) as pa,
+        cast(b.ab as double) as ab,
+        cast(b.hits as double) as hits,
+        cast(b.r as double) as r,
+        cast(b.hr as double) as hr,
+        cast(b.rbi as double) as rbi,
+        cast(b.sb as double) as sb,
+        cast(b.bb as double) as bb,
+        cast(b.so as double) as so,
+        cast(b.batting_avg as double) as batting_avg,
+
+        -- Pitcher fields null on hitter rows
+        cast(null as varchar) as pitcher_pos,
+        cast(null as varchar) as pitcher_opp,
+        cast(null as double) as pitch_g,
+        cast(null as double) as gs,
+        cast(null as double) as projected_starts,
+        cast(null as varchar) as first_start_day,
+        cast(null as boolean) as is_two_start,
+        cast(null as double) as qs,
+        cast(null as double) as w,
+        cast(null as double) as l,
+        cast(null as double) as sv,
+        cast(null as double) as hld,
+        cast(null as double) as ip,
+        cast(null as double) as hits_allowed,
+        cast(null as double) as er,
+        cast(null as double) as k,
+        cast(null as double) as walks_allowed,
+        cast(null as double) as hr_allowed,
+        cast(null as double) as era,
+        cast(null as double) as whip,
+        cast(null as varchar) as next_proj_opps,
+
+        cast(contains(b.pos_array, 'C') as int) as is_c_eligible,
+        cast(contains(b.pos_array, '1B') as int) as is_1b_eligible,
+        cast(contains(b.pos_array, '2B') as int) as is_2b_eligible,
+        cast(contains(b.pos_array, '3B') as int) as is_3b_eligible,
+        cast(contains(b.pos_array, 'SS') as int) as is_ss_eligible,
+        cast(contains(b.pos_array, 'OF') as int) as is_of_eligible,
+        cast(
+            (contains(b.pos_array, '2B') or contains(b.pos_array, 'SS')) as int
+        ) as is_mi_eligible,
+        cast(
+            (contains(b.pos_array, '1B') or contains(b.pos_array, '3B')) as int
+        ) as is_ci_eligible,
+        1 as is_util_eligible,
+        0 as is_p_eligible
+    from base b
+    where b.has_weekly_hitting
+),
+
+pitchers as (
+    select
+        b.league,
+        b.format,
+        b.ftn_league_size,
+        b.owner,
+        cast(b.own_pct as int) as own_pct,
+        b.id as nfbc_id,
+        trim(b.first_name) as first_name,
+        trim(b.last_name) as last_name,
+        concat(trim(b.first_name), ' ', trim(b.last_name)) as player_name,
+        b.team,
+        -- Prefer Razzball SP/RP label; fall back to NFBC pos string.
+        coalesce(b.pitcher_pos, b.pos) as pos_raw,
+        transform(
+            split(upper(coalesce(coalesce(b.pitcher_pos, b.pos), '')), ','),
+            p -> trim(p)
+        ) as pos_array,
+        cast(null as varchar) as bats,
+        b.week_of,
+        'pitcher' as row_type,
+
+        cast(null as int) as num_g,
+        cast(null as int) as home_games,
+        cast(null as int) as away_games,
+        cast(null as int) as vs_rhp,
+        cast(null as int) as vs_lhp,
+        cast(b.dollars as double) as dollars,
+        cast(b.dollars_per_game as double) as dollars_per_game,
+        cast(null as double) as dollars_monday_thursday,
+        cast(null as double) as dollars_friday_sunday,
+        b.ros_value,
+        coalesce(b.pitcher_opp, b.opps) as opps,
+
+        cast(null as double) as hit_g,
+        cast(null as double) as pa,
+        cast(null as double) as ab,
+        cast(null as double) as hits,
+        cast(null as double) as r,
+        cast(null as double) as hr,
+        cast(null as double) as rbi,
+        cast(null as double) as sb,
+        cast(null as double) as bb,
+        cast(null as double) as so,
+        cast(null as double) as batting_avg,
+
+        b.pitcher_pos,
+        b.pitcher_opp,
+        cast(b.pitch_g as double) as pitch_g,
+        cast(b.gs as double) as gs,
+        cast(b.gs as double) as projected_starts,
+        -- First parenthetical day code in Opp, e.g. "@NYM(TU) / WSH(SU)" -> TU.
+        -- Null-safe when Opp is blank or has no day codes (RP / no start listed).
+        nullif(
+            regexp_extract(coalesce(b.pitcher_opp, ''), '\(([A-Z]{2})\)', 1),
+            ''
+        ) as first_start_day,
+        case
+            when b.gs is not null and b.gs >= 2 then true
+            when cardinality(
+                regexp_extract_all(coalesce(b.pitcher_opp, ''), '\(([A-Z]{2})\)')
+            ) >= 2 then true
+            when b.gs is not null and b.gs < 2 then false
+            when coalesce(b.pitcher_opp, '') = '' then false
+            else false
+        end as is_two_start,
+        cast(b.qs as double) as qs,
+        cast(b.w as double) as w,
+        cast(b.l as double) as l,
+        cast(b.sv as double) as sv,
+        cast(b.hld as double) as hld,
+        cast(b.ip as double) as ip,
+        cast(b.hits_allowed as double) as hits_allowed,
+        cast(b.er as double) as er,
+        cast(b.k as double) as k,
+        cast(b.walks_allowed as double) as walks_allowed,
+        cast(b.hr_allowed as double) as hr_allowed,
+        cast(b.era as double) as era,
+        cast(b.whip as double) as whip,
+        b.next_proj_opps,
+
+        0 as is_c_eligible,
+        0 as is_1b_eligible,
+        0 as is_2b_eligible,
+        0 as is_3b_eligible,
+        0 as is_ss_eligible,
+        0 as is_of_eligible,
+        0 as is_mi_eligible,
+        0 as is_ci_eligible,
+        0 as is_util_eligible,
+        1 as is_p_eligible
+    from base b
+    where b.has_weekly_pitching
 )
 
-select
-    h.league,
-    lf.format,
-    lf.ftn_league_size,
-    h.owner,
-    cast(h.own_pct as int) as own_pct,
-    h.nfbc_id,
-    trim(h.first_name) as first_name,
-    trim(h.last_name) as last_name,
-    concat(trim(h.first_name), ' ', trim(h.last_name)) as player_name,
-    h.team,
-    h.pos_raw,
-    h.pos_array,
-    h.bats,
-    h.week_of,
-    cast(h.num_g as int) as num_g,
-    cast(h.home_games as int) as home_games,
-    cast(h.away_games as int) as away_games,
-    cast(h.vs_rhp as int) as vs_rhp,
-    cast(h.vs_lhp as int) as vs_lhp,
-    cast(h.dollars as double) as dollars,
-    cast(h.dollars_per_game as double) as dollars_per_game,
-    cast(h.dollars_monday_thursday as double) as dollars_monday_thursday,
-    cast(h.dollars_friday_sunday as double) as dollars_friday_sunday,
-    cast(
-        case lf.format
-            when 'oc' then h.ros_oc
-            when 'me' then h.ros_me
-            when '50s' then h.ros_50
-        end as double
-    ) as ros_value,
-    -- Per-slot eligibility flags. NFBC slot rules:
-    --   C/1B/2B/3B/SS/OF = exact position match
-    --   MI               = 2B or SS
-    --   CI               = 1B or 3B
-    --   UTIL             = any hitter
-    cast(contains(h.pos_array, 'C')  as int) as is_c_eligible,
-    cast(contains(h.pos_array, '1B') as int) as is_1b_eligible,
-    cast(contains(h.pos_array, '2B') as int) as is_2b_eligible,
-    cast(contains(h.pos_array, '3B') as int) as is_3b_eligible,
-    cast(contains(h.pos_array, 'SS') as int) as is_ss_eligible,
-    cast(contains(h.pos_array, 'OF') as int) as is_of_eligible,
-    cast(
-        (contains(h.pos_array, '2B') or contains(h.pos_array, 'SS')) as int
-    ) as is_mi_eligible,
-    cast(
-        (contains(h.pos_array, '1B') or contains(h.pos_array, '3B')) as int
-    ) as is_ci_eligible,
-    1 as is_util_eligible
-from hitters h
-inner join league_formats lf
-    on h.league = lf.league
+select * from hitters
+union all
+select * from pitchers

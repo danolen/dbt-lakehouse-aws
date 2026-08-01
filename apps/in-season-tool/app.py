@@ -455,10 +455,26 @@ with tab_lineup:
         )
         st.stop()
 
-    team = lineup_df[lineup_df["owner"] == selected_owner].copy()
+    team_all = lineup_df[lineup_df["owner"] == selected_owner].copy()
+
+    if team_all.empty:
+        st.warning(f"No players rostered to `{selected_owner}`.")
+        st.stop()
+
+    # #58 expanded this mart with pitcher rows. v1 optimizer is hitters-only;
+    # filter explicitly so SP/RP rows never land in UTIL via the catch-all.
+    if "row_type" in team_all.columns:
+        team = team_all[team_all["row_type"].fillna("hitter") == "hitter"].copy()
+        team_pitchers = team_all[team_all["row_type"] == "pitcher"].copy()
+    else:
+        team = team_all
+        team_pitchers = team_all.iloc[0:0].copy()
 
     if team.empty:
-        st.warning(f"No players rostered to `{selected_owner}`.")
+        st.warning(
+            f"No hitter rows rostered to `{selected_owner}` with a weekly "
+            "hitting projection."
+        )
         st.stop()
 
     # Derive pos_array from pos_raw (plain comma-separated string) rather
@@ -597,6 +613,91 @@ with tab_lineup:
         hide_index=True,
     )
 
+    if not team_pitchers.empty:
+        pitch_cols = [
+            c
+            for c in [
+                "player_name",
+                "team",
+                "pos_raw",
+                "dollars",
+                "pitch_g",
+                "gs",
+                "first_start_day",
+                "is_two_start",
+                "opps",
+                "w",
+                "sv",
+                "k",
+                "ip",
+                "er",
+                "hits_allowed",
+                "walks_allowed",
+                "era",
+                "whip",
+                "ros_value",
+            ]
+            if c in team_pitchers.columns
+        ]
+        pitch_view = team_pitchers[pitch_cols].copy()
+        for col in (
+            "dollars",
+            "pitch_g",
+            "gs",
+            "w",
+            "sv",
+            "k",
+            "ip",
+            "er",
+            "hits_allowed",
+            "walks_allowed",
+            "era",
+            "whip",
+            "ros_value",
+        ):
+            if col in pitch_view.columns:
+                pitch_view[col] = pd.to_numeric(
+                    pitch_view[col], errors="coerce"
+                ).round(2)
+        if "dollars" in pitch_view.columns:
+            pitch_view = pitch_view.sort_values(
+                "dollars", ascending=False, na_position="last"
+            )
+        st.markdown(
+            f"### Pitchers this week ({len(pitch_view)}) — projection only"
+        )
+        st.caption(
+            "Pitcher rows are available for streaming / expected-lineup work "
+            "(#60). The v1 optimizer above remains hitters-only."
+        )
+        st.dataframe(
+            pitch_view.rename(
+                columns={
+                    "player_name": "Player",
+                    "team": "Team",
+                    "pos_raw": "Pos",
+                    "dollars": "Wk $",
+                    "pitch_g": "G",
+                    "gs": "GS",
+                    "first_start_day": "1st",
+                    "is_two_start": "2-start",
+                    "opps": "Opp",
+                    "w": "W",
+                    "sv": "SV",
+                    "k": "K",
+                    "ip": "IP",
+                    "er": "ER",
+                    "hits_allowed": "H",
+                    "walks_allowed": "BB",
+                    "era": "ERA",
+                    "whip": "WHIP",
+                    "ros_value": "RoS $",
+                }
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
     with st.expander("How this works (v1)"):
         st.markdown(
             "- **Greedy Monday-lock**: for each slot in a fixed order (C, SS, "
@@ -606,7 +707,8 @@ with tab_lineup:
             "Friday-lock view with the weekend-only file.\n"
             "- **Known limitation**: greedy can be suboptimal when a player "
             "is eligible at multiple scarce slots. MILP global optimum lands "
-            "in v3.\n"
-            "- **Scope**: hitters only. Pitcher streaming / two-start planner "
-            "is Phase 1c."
+            "in #60.\n"
+            "- **Pitchers**: component projections (W/SV/K/IP, start day, "
+            "two-start flag) are in `mart_weekly_lineup_inputs` as "
+            "`row_type='pitcher'` (#58). Active pitcher selection is #60."
         )

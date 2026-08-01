@@ -24,7 +24,13 @@ models:
               - player
 
   - name: mart_weekly_lineup_inputs
-    description: One row per (league, owner, nfbc_id).
+    description: >-
+      Weekly lineup input surface for hitters and pitchers (#58). Grain is
+      one row per (league, owner, nfbc_id, row_type). Free agents (empty
+      owner) are included. Hitter rows carry G/PA/AB/H/R/HR/RBI/SB and AVG
+      numerators; pitcher rows carry G/GS, first_start_day, is_two_start,
+      W/SV/K/IP and ratio numerators (hits_allowed, er, walks_allowed).
+      Existing hitter eligibility flags are unchanged for UI compatibility.
     columns:
       - name: nfbc_id
         data_tests:
@@ -41,6 +47,37 @@ models:
           - accepted_values:
               arguments:
                 values: ['oc', 'me', '50s']
+      - name: row_type
+        description: hitter or pitcher. Two-way players appear once per role.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['hitter', 'pitcher']
+      - name: is_two_start
+        description: >-
+          Pitcher rows only. True when GS >= 2 or Opp lists two day codes.
+          False when no start is listed; null only on hitter rows.
+      - name: first_start_day
+        description: >-
+          Pitcher rows only. First Opp day code (MO/TU/WE/TH/FR/SA/SU).
+          Null when Opp has no day code (typical RP) or on hitter rows.
+      - name: projected_starts
+        description: Pitcher rows only. Alias of GS from the weekly file.
+      - name: ab
+        description: Hitter projected at-bats (AVG denominator).
+      - name: hits
+        description: Hitter projected hits (AVG numerator).
+      - name: ip
+        description: Pitcher projected innings (ERA/WHIP denominator).
+      - name: er
+        description: Pitcher projected earned runs (ERA numerator).
+      - name: hits_allowed
+        description: Pitcher projected hits allowed (WHIP numerator part).
+      - name: walks_allowed
+        description: Pitcher projected walks (WHIP numerator part).
+      - name: is_p_eligible
+        description: 1 for pitcher rows (NFBC P slot); 0 for hitters.
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
@@ -48,9 +85,12 @@ models:
               - league
               - owner
               - nfbc_id
+              - row_type
 
   - name: mart_weekly_projections
-    description: One row per (id, league).
+    description: >-
+      One row per (id, league). Carries weekly dollar values plus hitter and
+      pitcher component stats when a Razzball weekly file row exists (#58).
     columns:
       - name: id
         data_tests:
@@ -62,6 +102,10 @@ models:
               arguments:
                 to: ref('league_config')
                 field: league
+      - name: has_weekly_hitting
+        description: True when joined to the current weekly hitting file.
+      - name: has_weekly_pitching
+        description: True when joined to the current weekly pitching file.
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
