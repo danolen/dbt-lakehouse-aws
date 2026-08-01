@@ -4,7 +4,7 @@
     )
 }}
 
-select 
+select
     nfbc.id,
     split_part(nfbc.players, ', ', 2) first_name,
     split_part(nfbc.players, ', ', 1) last_name,
@@ -30,6 +30,42 @@ select
     cast(coalesce(nullif(hit.ros12_dollars_per_game, ''), nullif(pitch.ros12_dollars_per_game, '')) as double) ros12_dollars_per_game,
     cast(coalesce(nullif(hit.rfs12, ''), nullif(pitch.rfs12, '')) as int) rfs12,
     cast(coalesce(nullif(hit.rfs15, ''), nullif(pitch.rfs15, '')) as int) rfs15,
+
+    -- Weekly hitter component stats (#58). Null when no weekly hitting file row.
+    cast(nullif(hit.g, '') as double) as hit_g,
+    cast(nullif(hit.pa, '') as double) as pa,
+    cast(nullif(hit.ab, '') as double) as ab,
+    cast(nullif(hit.h, '') as double) as hits,
+    cast(nullif(hit.r, '') as double) as r,
+    cast(nullif(hit.hr, '') as double) as hr,
+    cast(nullif(hit.rbi, '') as double) as rbi,
+    cast(nullif(hit.sb, '') as double) as sb,
+    cast(nullif(hit.bb, '') as double) as bb,
+    cast(nullif(hit.so, '') as double) as so,
+    cast(nullif(hit.avg, '') as double) as batting_avg,
+
+    -- Weekly pitcher component stats (#58). Null when no weekly pitching file row.
+    nullif(pitch.pos, '') as pitcher_pos,
+    nullif(pitch.opp, '') as pitcher_opp,
+    cast(nullif(pitch.g, '') as double) as pitch_g,
+    cast(nullif(pitch.gs, '') as double) as gs,
+    cast(nullif(pitch.qs, '') as double) as qs,
+    cast(nullif(pitch.w, '') as double) as w,
+    cast(nullif(pitch.l, '') as double) as l,
+    cast(nullif(pitch.sv, '') as double) as sv,
+    cast(nullif(pitch.hld, '') as double) as hld,
+    cast(nullif(pitch.ip, '') as double) as ip,
+    cast(nullif(pitch.h, '') as double) as hits_allowed,
+    cast(nullif(pitch.er, '') as double) as er,
+    cast(nullif(pitch.k, '') as double) as k,
+    cast(nullif(pitch.bb, '') as double) as walks_allowed,
+    cast(nullif(pitch.hr, '') as double) as hr_allowed,
+    cast(nullif(pitch.era, '') as double) as era,
+    cast(nullif(pitch.whip, '') as double) as whip,
+    -- True when a current weekly hitting / pitching projection row exists.
+    (hit.nfbcid is not null) as has_weekly_hitting,
+    (pitch.nfbcid is not null) as has_weekly_pitching,
+
     p50.value pre_szn_50,
     poc.value pre_szn_oc,
     pme.value pre_szn_me,
