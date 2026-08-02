@@ -146,6 +146,9 @@ models:
           - accepted_values:
               arguments:
                 values: [12, 15]
+                # Integer column; default quote=true emits varchar literals and
+                # Athena TYPE_MISMATCH on IN (integer vs varchar).
+                quote: false
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
