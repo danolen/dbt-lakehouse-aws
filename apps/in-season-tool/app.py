@@ -533,21 +533,125 @@ with tab_lineup:
     c3.metric("Active Slots", active_capacity)
     c4.metric("Projected $", f"{result.total_score:.1f}")
 
-    totals = result.totals or {}
+    # Monday lock scores/displays Mon–Thu hitter components when present (#210).
+    use_mt = lineup_mode == "monday"
+    if lineup_mode == "monday":
+        dollar_field, dollar_label = "dollars_monday_thursday", "M-Th $"
+    elif lineup_mode == "friday":
+        dollar_field, dollar_label = "dollars_friday_sunday", "F-Su $"
+    else:
+        dollar_field, dollar_label = "dollars", "Wk $"
+
+    def _num(value):
+        try:
+            if value is None or (isinstance(value, float) and value != value):
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _hitter_stat(player, key):
+        """Prefer Mon–Thu ``mt_*`` fields on Monday; else full-week components."""
+        if use_mt:
+            mt_key = {
+                "r": "mt_r",
+                "hr": "mt_hr",
+                "rbi": "mt_rbi",
+                "sb": "mt_sb",
+                "hits": "mt_hits",
+                "ab": "mt_ab",
+                "num_g": "mt_num_g",
+                "home_games": "mt_home_games",
+                "away_games": "mt_away_games",
+                "vs_rhp": "mt_vs_rhp",
+                "vs_lhp": "mt_vs_lhp",
+                "batting_avg": "mt_batting_avg",
+            }.get(key)
+            if mt_key is not None:
+                mt_val = _num(player.get(mt_key))
+                if mt_val is not None:
+                    return mt_val
+        return _num(player.get(key))
 
     def _fmt(value, spec):
         return format(value, spec) if isinstance(value, (int, float)) else "—"
 
-    t1, t2, t3, t4, t5 = st.columns(5)
-    t1.metric("R / HR", f"{_fmt(totals.get('r'), '.0f')} / {_fmt(totals.get('hr'), '.0f')}")
-    t2.metric("RBI / SB", f"{_fmt(totals.get('rbi'), '.0f')} / {_fmt(totals.get('sb'), '.1f')}")
-    t3.metric("AVG", _fmt(totals.get("avg"), ".3f"))
-    t4.metric("K / W / SV", f"{_fmt(totals.get('k'), '.0f')} / {_fmt(totals.get('w'), '.1f')} / {_fmt(totals.get('sv'), '.1f')}")
-    t5.metric("ERA / WHIP", f"{_fmt(totals.get('era'), '.2f')} / {_fmt(totals.get('whip'), '.2f')}")
-    st.caption(
-        "Ratio totals are computed from aggregated numerators and denominators "
-        "(H/AB, ER/IP, (H+BB)/IP), not averaged across players."
+    # Expected totals from starters only — two cross-tabs (hitting / pitching).
+    hit_r = hit_hr = hit_rbi = hit_sb = hit_h = hit_ab = 0.0
+    pit_k = pit_w = pit_sv = pit_ip = pit_er = pit_h = pit_bb = 0.0
+    for a in result.starters:
+        p = a.player
+        if a.slot == "P" or (p.get("row_type") or "hitter") == "pitcher":
+            pit_k += _num(p.get("k")) or 0.0
+            pit_w += _num(p.get("w")) or 0.0
+            pit_sv += _num(p.get("sv")) or 0.0
+            pit_ip += _num(p.get("ip")) or 0.0
+            pit_er += _num(p.get("er")) or 0.0
+            pit_h += _num(p.get("hits_allowed")) or 0.0
+            pit_bb += _num(p.get("walks_allowed")) or 0.0
+        else:
+            hit_r += _hitter_stat(p, "r") or 0.0
+            hit_hr += _hitter_stat(p, "hr") or 0.0
+            hit_rbi += _hitter_stat(p, "rbi") or 0.0
+            hit_sb += _hitter_stat(p, "sb") or 0.0
+            hit_h += _hitter_stat(p, "hits") or 0.0
+            hit_ab += _hitter_stat(p, "ab") or 0.0
+
+    hit_avg = (hit_h / hit_ab) if hit_ab > 0 else None
+    pit_era = ((pit_er * 9.0) / pit_ip) if pit_ip > 0 else None
+    pit_whip = ((pit_h + pit_bb) / pit_ip) if pit_ip > 0 else None
+
+    window_note = (
+        "Mon–Thu hitter projections"
+        if use_mt
+        else ("Fri–Sun hitter $" if lineup_mode == "friday" else "full-week projections")
     )
+    st.markdown("### Expected lineup totals")
+    st.caption(
+        f"Starters only ({window_note}). Ratios use summed numerators/"
+        "denominators (H÷AB, ER×9÷IP, (H+BB)÷IP), not averaged player rates."
+    )
+    hit_col, pit_col = st.columns(2)
+    with hit_col:
+        st.markdown("**Hitting**")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "R": _fmt(hit_r, ".1f"),
+                        "HR": _fmt(hit_hr, ".1f"),
+                        "RBI": _fmt(hit_rbi, ".1f"),
+                        "SB": _fmt(hit_sb, ".1f"),
+                        "H": _fmt(hit_h, ".1f"),
+                        "AB": _fmt(hit_ab, ".1f"),
+                        "AVG": _fmt(hit_avg, ".3f"),
+                    }
+                ],
+                index=["Projected"],
+            ),
+            use_container_width=True,
+        )
+    with pit_col:
+        st.markdown("**Pitching**")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "K": _fmt(pit_k, ".1f"),
+                        "W": _fmt(pit_w, ".1f"),
+                        "SV": _fmt(pit_sv, ".1f"),
+                        "IP": _fmt(pit_ip, ".1f"),
+                        "ER": _fmt(pit_er, ".1f"),
+                        "H": _fmt(pit_h, ".1f"),
+                        "BB": _fmt(pit_bb, ".1f"),
+                        "ERA": _fmt(pit_era, ".2f"),
+                        "WHIP": _fmt(pit_whip, ".2f"),
+                    }
+                ],
+                index=["Projected"],
+            ),
+            use_container_width=True,
+        )
 
     if result.missing_projection_ids:
         st.info(
@@ -561,7 +665,7 @@ with tab_lineup:
             + ", ".join(result.unfilled_slots)
         )
 
-    starter_cols = [
+    HITTER_COLS = [
         "slot",
         "player_name",
         "team",
@@ -569,109 +673,113 @@ with tab_lineup:
         "bats",
         "num_g",
         "dollars",
-        "dollars_per_game",
+        "r",
+        "hr",
+        "rbi",
+        "sb",
+        "hits",
+        "ab",
+        "batting_avg",
         "home_games",
         "away_games",
         "vs_rhp",
         "vs_lhp",
         "ros_value",
     ]
+    HITTER_LABELS = {
+        "slot": "Slot",
+        "player_name": "Player",
+        "team": "Team",
+        "pos_raw": "Pos",
+        "bats": "B",
+        "num_g": "G",
+        "dollars": dollar_label,
+        "r": "R",
+        "hr": "HR",
+        "rbi": "RBI",
+        "sb": "SB",
+        "hits": "H",
+        "ab": "AB",
+        "batting_avg": "AVG",
+        "home_games": "HG",
+        "away_games": "AG",
+        "vs_rhp": "vR",
+        "vs_lhp": "vL",
+        "ros_value": "RoS $",
+    }
+
+    def _hitter_row(player, *, slot=None):
+        row = {}
+        if slot is not None:
+            row["slot"] = slot
+        row["player_name"] = player.get("player_name")
+        row["team"] = player.get("team")
+        row["pos_raw"] = player.get("pos_raw")
+        row["bats"] = player.get("bats")
+        row["num_g"] = _hitter_stat(player, "num_g")
+        dollar_val = _num(player.get(dollar_field))
+        if dollar_val is None:
+            dollar_val = _num(player.get("dollars"))
+        row["dollars"] = dollar_val
+        for key in ("r", "hr", "rbi", "sb", "hits", "ab", "batting_avg"):
+            row[key] = _hitter_stat(player, key)
+        if row["batting_avg"] is None and row["ab"]:
+            hits = row["hits"] or 0.0
+            row["batting_avg"] = hits / row["ab"] if row["ab"] else None
+        row["home_games"] = _hitter_stat(player, "home_games")
+        row["away_games"] = _hitter_stat(player, "away_games")
+        row["vs_rhp"] = _hitter_stat(player, "vs_rhp")
+        row["vs_lhp"] = _hitter_stat(player, "vs_lhp")
+        row["ros_value"] = _num(player.get("ros_value"))
+        return row
+
+    def _hitter_frame(records, *, include_slot=False):
+        cols = HITTER_COLS if include_slot else [c for c in HITTER_COLS if c != "slot"]
+        df_h = pd.DataFrame(records, columns=cols)
+        for col in cols:
+            if col in ("slot", "player_name", "team", "pos_raw", "bats"):
+                continue
+            decimals = 3 if col == "batting_avg" else (1 if col in ("dollars", "ros_value", "sb", "r", "hr", "rbi", "hits", "ab") else 1)
+            df_h[col] = pd.to_numeric(df_h[col], errors="coerce").round(decimals)
+        return df_h
 
     starters_records = []
     slot_order_index = {s: i for i, s in enumerate(SLOT_DISPLAY_ORDER)}
     for a in result.starters:
         if a.slot == "P":
             continue
-        row = {"slot": a.slot}
-        for k in starter_cols[1:]:
-            row[k] = a.player.get(k)
-        starters_records.append(row)
+        starters_records.append(_hitter_row(a.player, slot=a.slot))
 
-    starters_df = pd.DataFrame(starters_records, columns=starter_cols)
-    starters_df["_slot_order"] = starters_df["slot"].map(slot_order_index).fillna(99)
-    starters_df = (
-        starters_df.sort_values(["_slot_order", "dollars"], ascending=[True, False])
-        .drop(columns=["_slot_order"])
-        .reset_index(drop=True)
-    )
-
-    for col in (
-        "dollars",
-        "dollars_per_game",
-        "ros_value",
-    ):
-        if col in starters_df.columns:
-            starters_df[col] = pd.to_numeric(
-                starters_df[col], errors="coerce"
-            ).round(1)
+    starters_df = _hitter_frame(starters_records, include_slot=True)
+    if not starters_df.empty:
+        starters_df["_slot_order"] = starters_df["slot"].map(slot_order_index).fillna(99)
+        starters_df = (
+            starters_df.sort_values(["_slot_order", "dollars"], ascending=[True, False])
+            .drop(columns=["_slot_order"])
+            .reset_index(drop=True)
+        )
 
     st.markdown("### Starters")
     st.dataframe(
-        starters_df.rename(
-            columns={
-                "slot": "Slot",
-                "player_name": "Player",
-                "team": "Team",
-                "pos_raw": "Pos",
-                "bats": "B",
-                "num_g": "G",
-                "dollars": "Wk $",
-                "dollars_per_game": "Wk $/G",
-                "home_games": "H",
-                "away_games": "A",
-                "vs_rhp": "vR",
-                "vs_lhp": "vL",
-                "ros_value": "RoS $",
-            }
-        ),
+        starters_df.rename(columns=HITTER_LABELS),
         use_container_width=True,
         hide_index=True,
     )
 
-    bench_cols = [
-        "player_name",
-        "team",
-        "pos_raw",
-        "bats",
-        "num_g",
-        "dollars",
-        "dollars_per_game",
-        "home_games",
-        "away_games",
-        "vs_rhp",
-        "vs_lhp",
-        "ros_value",
-    ]
     bench_hitters = [
         p for p in result.bench if (p.get("row_type") or "hitter") == "hitter"
     ]
     bench_pitchers = [p for p in result.bench if p.get("row_type") == "pitcher"]
-    bench_records = [
-        {k: p.get(k) for k in bench_cols} for p in bench_hitters
-    ]
-    bench_df = pd.DataFrame(bench_records, columns=bench_cols)
-    for col in ("dollars", "dollars_per_game", "ros_value"):
-        if col in bench_df.columns:
-            bench_df[col] = pd.to_numeric(bench_df[col], errors="coerce").round(1)
+    bench_records = [_hitter_row(p) for p in bench_hitters]
+    bench_df = _hitter_frame(bench_records, include_slot=False)
+    if not bench_df.empty:
+        bench_df = bench_df.sort_values(
+            "dollars", ascending=False, na_position="last"
+        ).reset_index(drop=True)
 
     st.markdown(f"### Bench hitters ({len(bench_df)})")
     st.dataframe(
-        bench_df.rename(
-            columns={
-                "player_name": "Player",
-                "team": "Team",
-                "pos_raw": "Pos",
-                "bats": "B",
-                "num_g": "G",
-                "dollars": "Wk $",
-                "dollars_per_game": "Wk $/G",
-                "home_games": "H",
-                "away_games": "A",
-                "vs_rhp": "vR",
-                "vs_lhp": "vL",
-                "ros_value": "RoS $",
-            }
-        ),
+        bench_df.rename(columns=HITTER_LABELS),
         use_container_width=True,
         hide_index=True,
     )
@@ -766,8 +874,11 @@ with tab_lineup:
             "Monday scores hitters on Mon–Thu dollars (pitchers still use "
             "weekly $). Friday re-optimizes hitters on Fri–Sun projections and "
             "carries the Monday pitcher set through unchanged.\n"
-            "- **Ratio totals** come from aggregated numerators and "
-            "denominators (H/AB, ER/IP, (H+BB)/IP).\n"
+            "- **Expected totals**: hitting and pitching projections from the "
+            "active starters only, shown as separate tables. Monday uses "
+            "Mon–Thu hitter components when available; pitchers always use "
+            "full-week projections. Ratios use summed numerators/denominators "
+            "(H/AB, ER/IP, (H+BB)/IP).\n"
             "- **Utility Advantage**: when two hitters are equally valuable, "
             "the less flexible one takes the exact slot so the multi-position "
             "bat stays available for UTIL/MI/CI.\n"
