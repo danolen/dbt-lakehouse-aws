@@ -12,6 +12,14 @@ from dotenv import load_dotenv
 from pyathena import connect
 from pyathena.pandas.cursor import PandasCursor
 
+from faab_what_if import (
+    RANK_MODE_OVERALL,
+    RANK_MODE_WEEKLY,
+    analyze_add_drop,
+    format_delta_rows,
+    rank_candidates,
+    starters_table,
+)
 from lineup_optimizer import optimize_week
 from weekly_category_plan import (
     DEFAULT_STRETCH,
@@ -416,6 +424,360 @@ with tab_faab:
                 "then run `dbt seed && dbt build`."
             )
             st.dataframe(unmatched_df, use_container_width=True, hide_index=True)
+
+    # ------------------------------------------------------------------
+    # FAAB what-if (#187)
+    # ------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("FAAB what-if")
+    st.caption(
+        "Value a free-agent add by the change to your optimized Monday lineup, "
+        "not the candidate's standalone weekly $. Bench-only adds report zero "
+        "immediate starter impact. Uncertainty labels use the local noise floor "
+        "from the weekly category plan when available."
+    )
+
+    try:
+        wi_lineup = load_lineup_inputs(league_key)
+        wi_slots = load_roster_slots()
+    except Exception as e:
+        st.warning(f"What-if unavailable (lineup inputs failed to load): {e}")
+        wi_lineup = pd.DataFrame()
+        wi_slots = pd.DataFrame()
+
+    if wi_lineup.empty:
+        st.info(
+            "No `mart_weekly_lineup_inputs` rows for this league — what-if "
+            "needs roster + free-agent projections."
+        )
+    else:
+        wi_owners = sorted(
+            wi_lineup["owner"]
+            .dropna()
+            .loc[wi_lineup["owner"] != ""]
+            .unique()
+            .tolist()
+        )
+        default_owner_idx = 0
+        for i, o in enumerate(wi_owners):
+            if "Nolen" in str(o):
+                default_owner_idx = i
+                break
+
+        wi_owner = st.selectbox(
+            "Your team (roster to optimize)",
+            wi_owners,
+            index=default_owner_idx if wi_owners else 0,
+            key="faab_whatif_owner",
+        )
+
+        fa_mask = wi_lineup["owner"].isna() | (wi_lineup["owner"] == "")
+        free_agents_df = wi_lineup.loc[fa_mask].copy()
+        roster_df = wi_lineup.loc[wi_lineup["owner"] == wi_owner].copy()
+
+        def _parse_pos_wi(raw):
+            if raw is None:
+                return []
+            return [p.strip().upper() for p in str(raw).split(",") if p.strip()]
+
+        for frame in (roster_df, free_agents_df):
+            if frame.empty:
+                continue
+            if "row_type" not in frame.columns:
+                frame["row_type"] = "hitter"
+            frame["row_type"] = frame["row_type"].fillna("hitter")
+            if "pos_raw" in frame.columns:
+                frame["pos_array"] = frame["pos_raw"].apply(_parse_pos_wi)
+
+        fmt = (
+            wi_lineup["format"].dropna().iloc[0]
+            if "format" in wi_lineup.columns
+            and not wi_lineup["format"].dropna().empty
+            else None
+        )
+        hitter_slots = {}
+        pitcher_slots = {}
+        if fmt is not None and not wi_slots.empty:
+            hs = wi_slots[
+                (wi_slots["format"] == fmt) & (wi_slots["slot_group"] == "hitter")
+            ]
+            ps = wi_slots[
+                (wi_slots["format"] == fmt) & (wi_slots["slot_group"] == "pitcher")
+            ]
+            hitter_slots = dict(
+                zip(hs["slot"].astype(str), hs["count"].astype(int))
+            )
+            pitcher_slots = dict(
+                zip(ps["slot"].astype(str), ps["count"].astype(int))
+            )
+        slot_counts_wi = {**hitter_slots, **pitcher_slots}
+
+        plan_rows_wi = None
+        try:
+            plan_df_wi = load_weekly_category_plan(league_key)
+            if not plan_df_wi.empty and "team_name" in plan_df_wi.columns:
+                team_opts = sorted(
+                    plan_df_wi["team_name"].dropna().unique().tolist()
+                )
+                preferred = [t for t in team_opts if t == wi_owner]
+                plan_team = st.selectbox(
+                    "Overall standings team (pts/unit + noise floor)",
+                    team_opts,
+                    index=team_opts.index(preferred[0]) if preferred else 0,
+                    key="faab_whatif_plan_team",
+                )
+                plan_rows_wi = plan_df_wi.loc[
+                    plan_df_wi["team_name"] == plan_team
+                ].to_dict(orient="records")
+            else:
+                st.caption(
+                    "No weekly category plan for this league (stand-alone or "
+                    "not built). Raw category deltas still show; team-fit "
+                    "ranking falls back to weekly $."
+                )
+        except Exception:
+            st.caption(
+                "Weekly category plan unavailable — raw deltas only; "
+                "ranking uses weekly $."
+            )
+
+        if roster_df.empty:
+            st.warning(f"No rostered players for `{wi_owner}`.")
+        elif not slot_counts_wi:
+            st.warning("No roster slot config for this format.")
+        else:
+            roster_players = roster_df.to_dict(orient="records")
+            fa_players = free_agents_df.to_dict(orient="records")
+
+            fa_labels = {}
+            for p in fa_players:
+                nid = p.get("nfbc_id")
+                if nid is None or (isinstance(nid, float) and nid != nid):
+                    continue
+                name = p.get("player_name") or str(nid)
+                pos = p.get("pos_raw") or ""
+                dol = p.get("dollars_monday_thursday")
+                if dol is None or (isinstance(dol, float) and dol != dol):
+                    dol = p.get("dollars")
+                try:
+                    dol_s = f"${float(dol):.1f}" if dol is not None else "—"
+                except (TypeError, ValueError):
+                    dol_s = "—"
+                fa_labels[str(int(float(nid))) if str(nid).replace(".", "", 1).isdigit() else str(nid)] = (
+                    f"{name} ({pos}) · {dol_s}"
+                )
+
+            # Normalize keys to match candidate id types from multiselect
+            fa_by_id = {}
+            for p in fa_players:
+                nid = p.get("nfbc_id")
+                if nid is None or (isinstance(nid, float) and nid != nid):
+                    continue
+                fa_by_id[str(nid)] = p
+                try:
+                    fa_by_id[str(int(float(nid)))] = p
+                except (TypeError, ValueError):
+                    pass
+
+            owned_labels = {}
+            for p in roster_players:
+                nid = p.get("nfbc_id")
+                if nid is None:
+                    continue
+                rt = p.get("row_type") or "hitter"
+                name = p.get("player_name") or str(nid)
+                owned_labels[f"{nid}|{rt}"] = f"{name} ({rt})"
+
+            c_add, c_drop, c_mode = st.columns([2, 2, 1])
+            with c_add:
+                add_options = sorted(fa_labels.keys(), key=lambda k: fa_labels[k])
+                selected_adds = st.multiselect(
+                    "Add candidate(s)",
+                    options=add_options,
+                    format_func=lambda k: fa_labels.get(k, k),
+                    key="faab_whatif_adds",
+                )
+            with c_drop:
+                drop_mode = st.radio(
+                    "Drop",
+                    options=["auto", "explicit"],
+                    format_func=lambda m: (
+                        "Suggested (lowest-$ bench)"
+                        if m == "auto"
+                        else "Explicit drop"
+                    ),
+                    horizontal=True,
+                    key="faab_whatif_drop_mode",
+                )
+                explicit_drop = None
+                if drop_mode == "explicit" and owned_labels:
+                    explicit_drop = st.selectbox(
+                        "Drop player",
+                        options=list(owned_labels.keys()),
+                        format_func=lambda k: owned_labels.get(k, k),
+                        key="faab_whatif_drop",
+                    )
+            with c_mode:
+                rank_mode = st.radio(
+                    "Rank by",
+                    options=[RANK_MODE_OVERALL, RANK_MODE_WEEKLY],
+                    format_func=lambda m: (
+                        "Team-fit pts"
+                        if m == RANK_MODE_OVERALL
+                        else "Weekly $"
+                    ),
+                    key="faab_whatif_rank_mode",
+                )
+
+            if not selected_adds:
+                st.info("Select at least one free-agent candidate.")
+            else:
+                drop_key = None
+                auto_suggest = drop_mode == "auto"
+                if drop_mode == "explicit" and explicit_drop:
+                    nid_s, rt = explicit_drop.split("|", 1)
+                    try:
+                        nid_val = int(float(nid_s))
+                    except (TypeError, ValueError):
+                        nid_val = nid_s
+                    drop_key = (nid_val, rt)
+
+                ranked = rank_candidates(
+                    roster_players,
+                    slot_counts_wi,
+                    selected_adds,
+                    free_agents=fa_players,
+                    drop_key=drop_key,
+                    auto_suggest_drop=auto_suggest,
+                    rank_mode=rank_mode,
+                    plan_rows=plan_rows_wi,
+                    mode="monday",
+                )
+                warn = ranked[0].get("_unmatched_warning") if ranked else None
+                if warn:
+                    st.warning(warn)
+
+                rank_view = pd.DataFrame(
+                    [
+                        {
+                            "Rank": (
+                                f"T{r['display_rank']}"
+                                if r.get("tied")
+                                else r.get("display_rank")
+                            ),
+                            "Add": fa_labels.get(
+                                str(r["add_nfbc_id"]), str(r["add_nfbc_id"])
+                            ),
+                            "Drop": r.get("drop_nfbc_id"),
+                            "Δ weekly $": r.get("net_weekly_value"),
+                            "Δ overall pts (est.)": r.get(
+                                "net_overall_pts_estimate"
+                            ),
+                            "Tied": "yes" if r.get("tied") else "",
+                            "Bench-only": (
+                                "yes" if r.get("bench_only_add") else ""
+                            ),
+                            "OK": r.get("ok"),
+                            "Note": r.get("message"),
+                        }
+                        for r in ranked
+                    ]
+                )
+                st.markdown("#### Candidate ranking")
+                st.dataframe(
+                    rank_view, use_container_width=True, hide_index=True
+                )
+                st.caption(
+                    "Candidates whose team-fit deltas differ by less than the "
+                    "local noise floor share a tie rank (T#). The optimizer "
+                    "itself stays deterministic."
+                )
+
+                inspect_ids = [
+                    str(r["add_nfbc_id"]) for r in ranked if r.get("ok")
+                ]
+                if inspect_ids:
+                    focus = st.selectbox(
+                        "Inspect add/drop lineups",
+                        options=inspect_ids,
+                        format_func=lambda k: fa_labels.get(k, k),
+                        key="faab_whatif_inspect",
+                    )
+                    detail = analyze_add_drop(
+                        roster_players,
+                        slot_counts_wi,
+                        add_nfbc_id=focus,
+                        free_agents=fa_players,
+                        drop_key=drop_key,
+                        auto_suggest_drop=auto_suggest,
+                        plan_rows=plan_rows_wi,
+                        mode="monday",
+                    )
+                    if not detail.ok:
+                        st.error(detail.message)
+                    else:
+                        st.success(detail.message)
+                        m1, m2, m3 = st.columns(3)
+                        m1.metric(
+                            "Δ weekly $", f"{detail.net_weekly_value:+.1f}"
+                        )
+                        if detail.net_overall_pts_estimate is not None:
+                            m2.metric(
+                                "Δ overall pts (est.)",
+                                f"{detail.net_overall_pts_estimate:+.1f}",
+                                help=(
+                                    "Point estimate — see uncertainty column. "
+                                    "Moves inside the noise floor are labeled "
+                                    "within_noise."
+                                ),
+                            )
+                        else:
+                            m2.metric("Δ overall pts (est.)", "—")
+                        m3.metric(
+                            "Noise flags",
+                            (
+                                "some within noise"
+                                if detail.any_within_noise
+                                else "clear / n/a"
+                            ),
+                        )
+
+                        delta_df = pd.DataFrame(format_delta_rows(detail.category_deltas))
+                        if not delta_df.empty:
+                            st.markdown("#### Category deltas")
+                            show = delta_df.rename(
+                                columns={
+                                    "category": "Cat",
+                                    "baseline": "Baseline",
+                                    "what_if": "What-if",
+                                    "delta_raw": "Δ raw",
+                                    "pts_per_unit": "Pts/unit",
+                                    "delta_overall_pts_est": "Δ overall pts",
+                                    "noise_floor": "Noise floor",
+                                    "uncertainty": "Uncertainty",
+                                }
+                            )
+                            st.dataframe(
+                                show.drop(columns=["is_ratio"], errors="ignore"),
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+
+                        left, right = st.columns(2)
+                        with left:
+                            st.markdown("#### Baseline starters")
+                            st.dataframe(
+                                pd.DataFrame(starters_table(detail.baseline)),
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+                        with right:
+                            st.markdown("#### What-if starters")
+                            st.dataframe(
+                                pd.DataFrame(starters_table(detail.what_if)),
+                                use_container_width=True,
+                                hide_index=True,
+                            )
 
 
 # ---------------------------------------------------------------------------
@@ -904,8 +1266,9 @@ with tab_lineup:
             "- **Utility Advantage**: when two hitters are equally valuable, "
             "the less flexible one takes the exact slot so the multi-position "
             "bat stays available for UTIL/MI/CI.\n"
-            "- **Next**: category weighting from overall mobility (#186) and "
-            "FAAB add/drop what-if (#187) both call this same engine."
+            "- **Next**: FAAB add/drop what-if lives on the FAAB Worksheet "
+            "tab (#187); category weighting from overall mobility feeds the "
+            "Weekly Plan tab (#186)."
         )
 
 
