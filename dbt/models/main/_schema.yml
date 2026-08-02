@@ -351,11 +351,73 @@ models:
           - not_null:
               config:
                 where: "is_latest_snapshot"
+      - name: teams_at_current_points
+        description: >-
+          Teams sharing this category_points island (tie cluster size). Used
+          by #186 as local density context for the noise floor.
+      - name: tie_cluster_raw_width
+        description: >-
+          max_raw - min_raw among teams on the current point island. Zero when
+          every team on the island has the same raw stat (classic integer tie).
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
             combination_of_columns:
               - contest_key
               - snapshot_date
+              - team_key
+              - category
+
+  - name: mart_weekly_category_plan
+    description: >-
+      Weekly category targets for overall contests (#186). Grain is one row
+      per (league, team_key, category) on the latest mobility snapshot.
+      Includes maintain pace and stretch weekly targets for +25/+50/+100
+      category points, plus tie-cluster noise_floor_raw. Expected-lineup
+      projection and gap labels are applied in the in-season app. Non-overall
+      leagues are excluded.
+    columns:
+      - name: league
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('league_config')
+                field: league
+      - name: team_key
+        data_tests:
+          - not_null
+      - name: category
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['R', 'HR', 'RBI', 'SB', 'AVG', 'K', 'W', 'SV', 'ERA', 'WHIP']
+      - name: maintain_weekly_target
+        description: >-
+          Counting: current_raw / weeks_elapsed. Ratio: current rate to hold.
+      - name: stretch_weekly_target_25
+        description: Weekly target to gain ~25 category points by season end.
+      - name: stretch_weekly_target_50
+        description: Weekly target to gain ~50 category points by season end.
+      - name: stretch_weekly_target_100
+        description: Weekly target to gain ~100 category points by season end.
+      - name: noise_floor_raw
+        description: >-
+          max(tie_cluster_raw_width, raw_unit_size). Gaps at or below this
+          are reported as no meaningful difference.
+        data_tests:
+          - not_null
+      - name: weeks_elapsed
+        data_tests:
+          - not_null
+      - name: weeks_remaining
+        data_tests:
+          - not_null
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - league
               - team_key
               - category

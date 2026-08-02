@@ -13,6 +13,11 @@ from pyathena import connect
 from pyathena.pandas.cursor import PandasCursor
 
 from lineup_optimizer import optimize_week
+from weekly_category_plan import (
+    DEFAULT_STRETCH,
+    STRETCH_OPTIONS,
+    build_category_plan_rows,
+)
 
 # Display order for the starters table. Intentionally different from the
 # greedy fill order (which is most-constrained first) — this is purely a
@@ -120,6 +125,21 @@ def load_roster_slots():
     return _connect().cursor().execute(query).as_pandas()
 
 
+@st.cache_data(ttl=3600)
+def load_league_config():
+    query = f"SELECT * FROM {ATHENA_SEEDS_SCHEMA}.league_config"
+    return _connect().cursor().execute(query).as_pandas()
+
+
+@st.cache_data(ttl=900)
+def load_weekly_category_plan(league):
+    query = f"""
+        SELECT * FROM {ATHENA_SCHEMA}.mart_weekly_category_plan
+        WHERE league = '{league}'
+    """
+    return _optimize_df(_connect().cursor().execute(query).as_pandas())
+
+
 try:
     unmatched_df = load_unmatched()
 except Exception:
@@ -142,7 +162,9 @@ selected_league = st.sidebar.selectbox("Select League", list(LEAGUES.keys()))
 league_key = LEAGUES[selected_league]
 
 
-tab_faab, tab_lineup = st.tabs(["FAAB Worksheet", "Lineup Optimizer"])
+tab_faab, tab_lineup, tab_plan = st.tabs(
+    ["FAAB Worksheet", "Lineup Optimizer", "Weekly Plan"]
+)
 
 
 # ---------------------------------------------------------------------------
@@ -884,4 +906,240 @@ with tab_lineup:
             "bat stays available for UTIL/MI/CI.\n"
             "- **Next**: category weighting from overall mobility (#186) and "
             "FAAB add/drop what-if (#187) both call this same engine."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Weekly Plan tab (#186) — overall contests only
+# ---------------------------------------------------------------------------
+
+with tab_plan:
+    st.subheader(f"Weekly Category Plan — {selected_league}")
+    st.caption(
+        "Maintain vs stretch targets for overall contests, compared to the "
+        "expected Monday lineup projection. Recommendation is suppressed when "
+        "the gap is inside the local tie-cluster noise floor."
+    )
+
+    try:
+        league_cfg = load_league_config()
+    except Exception as e:
+        st.error(f"Failed to load league_config: {e}")
+        st.stop()
+
+    cfg_row = league_cfg[league_cfg["league"] == league_key]
+    overall_id = None
+    if not cfg_row.empty:
+        raw_id = cfg_row.iloc[0].get("nfbc_overall_game_type_id")
+        if raw_id is not None and str(raw_id).strip() not in ("", "nan", "None"):
+            overall_id = raw_id
+
+    if overall_id is None:
+        st.info(
+            f"`{selected_league}` is a stand-alone league (no overall "
+            "standings feed). Weekly category targets require an overall "
+            "contest — use the Lineup Optimizer for sit/start here. "
+            "Overall leagues: OC and NFBC 50."
+        )
+        st.stop()
+
+    try:
+        plan_df = load_weekly_category_plan(league_key)
+        lineup_df = load_lineup_inputs(league_key)
+        slots_df = load_roster_slots()
+    except Exception as e:
+        st.error(
+            f"Failed to load weekly plan data: {e}\n\n"
+            "Confirm `dbt seed --select season_scoring_calendar` and "
+            "`dbt build --select mart_weekly_category_plan` have run."
+        )
+        st.stop()
+
+    if plan_df.empty:
+        st.warning(
+            f"No rows in `mart_weekly_category_plan` for `{league_key}`. "
+            "Rebuild after mobility is fresh."
+        )
+        st.stop()
+
+    team_options = sorted(plan_df["team_name"].dropna().unique().tolist())
+    # Prefer the roster owner label when it matches a standings team name.
+    lineup_owners = set()
+    if not lineup_df.empty and "owner" in lineup_df.columns:
+        lineup_owners = set(
+            lineup_df["owner"].dropna().loc[lineup_df["owner"] != ""].unique()
+        )
+    preferred = [t for t in team_options if t in lineup_owners]
+    default_idx = team_options.index(preferred[0]) if preferred else 0
+
+    selected_team = st.selectbox(
+        "Overall team",
+        team_options,
+        index=default_idx,
+        key="plan_team",
+    )
+    stretch_points = st.radio(
+        "Stretch target (overall category points)",
+        options=list(STRETCH_OPTIONS),
+        index=list(STRETCH_OPTIONS).index(DEFAULT_STRETCH),
+        horizontal=True,
+        key="plan_stretch",
+        help="Ladder from #183/#186. 1- and 5-point targets are intentionally omitted.",
+    )
+
+    team_plan = plan_df[plan_df["team_name"] == selected_team]
+    if team_plan.empty:
+        st.warning("No plan rows for that team.")
+        st.stop()
+
+    meta = team_plan.iloc[0]
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Week Of", str(meta.get("week_of") or "—"))
+    rank_val = meta.get("overall_rank")
+    m2.metric(
+        "Overall Rank",
+        f"{int(rank_val)}" if rank_val is not None and rank_val == rank_val else "—",
+    )
+    m3.metric("Weeks Elapsed", f"{int(meta['weeks_elapsed'])}")
+    m4.metric("Weeks Remaining", f"{int(meta['weeks_remaining'])}")
+    st.caption(
+        f"Snapshot {meta.get('snapshot_date')} · season "
+        f"{int(meta['season_scoring_periods'])} scoring periods from "
+        f"{meta.get('season_start_date')} (see `season_scoring_calendar` seed)."
+    )
+
+    # Expected lineup (Monday lock) for the matching roster owner, if any.
+    roster_owner = selected_team if selected_team in lineup_owners else None
+    if roster_owner is None and preferred:
+        # Fall back: only when the selected standings team isn't a roster label.
+        roster_owner = None
+
+    result = None
+    if roster_owner is None:
+        st.warning(
+            f"No `mart_weekly_lineup_inputs` owner named `{selected_team}`. "
+            "Targets still show; projection/gap need a matching roster."
+        )
+        totals = {}
+        missing_ids = []
+        unfilled = []
+    else:
+        fmt = lineup_df["format"].dropna().iloc[0]
+        hitter_slots = dict(
+            zip(
+                slots_df.loc[
+                    (slots_df["format"] == fmt) & (slots_df["slot_group"] == "hitter"),
+                    "slot",
+                ].astype(str),
+                slots_df.loc[
+                    (slots_df["format"] == fmt) & (slots_df["slot_group"] == "hitter"),
+                    "count",
+                ].astype(int),
+            )
+        )
+        pitcher_slots = dict(
+            zip(
+                slots_df.loc[
+                    (slots_df["format"] == fmt) & (slots_df["slot_group"] == "pitcher"),
+                    "slot",
+                ].astype(str),
+                slots_df.loc[
+                    (slots_df["format"] == fmt) & (slots_df["slot_group"] == "pitcher"),
+                    "count",
+                ].astype(int),
+            )
+        )
+        team_all = lineup_df[lineup_df["owner"] == roster_owner].copy()
+        if "row_type" not in team_all.columns:
+            team_all["row_type"] = "hitter"
+        team_all["row_type"] = team_all["row_type"].fillna("hitter")
+
+        def _parse_pos(raw):
+            if raw is None:
+                return []
+            return [p.strip().upper() for p in str(raw).split(",") if p.strip()]
+
+        team_all["pos_array"] = team_all["pos_raw"].apply(_parse_pos)
+        players = team_all.to_dict(orient="records")
+        result = optimize_week(
+            players,
+            {**hitter_slots, **pitcher_slots},
+            mode="monday",
+        )
+        totals = result.totals or {}
+        missing_ids = result.missing_projection_ids or []
+        unfilled = result.unfilled_slots or []
+
+    if missing_ids:
+        st.info(
+            f"{len(missing_ids)} rostered player(s) missing a weekly projection "
+            "were scored as zero in the expected lineup."
+        )
+    if unfilled:
+        st.warning("Unfilled slots: " + ", ".join(unfilled))
+
+    plan_rows = build_category_plan_rows(
+        team_plan.to_dict(orient="records"),
+        totals,
+        stretch_points=int(stretch_points),
+    )
+    display = pd.DataFrame(plan_rows)
+    if display.empty:
+        st.warning("No category rows to display.")
+        st.stop()
+
+    def _fmt_num(val, spec):
+        return format(val, spec) if isinstance(val, (int, float)) else "—"
+
+    view = pd.DataFrame(
+        {
+            "Category": display["category"],
+            "Current": [
+                _fmt_num(v, ".3f" if r else ".1f")
+                for v, r in zip(display["current_raw"], display["is_ratio"])
+            ],
+            "Pts": display["current_category_points"].map(
+                lambda v: _fmt_num(v, ".1f")
+            ),
+            "Maintain/wk": [
+                _fmt_num(v, ".3f" if r else ".2f")
+                for v, r in zip(display["maintain_weekly_target"], display["is_ratio"])
+            ],
+            f"Stretch +{stretch_points}/wk": [
+                _fmt_num(v, ".3f" if r else ".2f")
+                for v, r in zip(display["stretch_weekly_target"], display["is_ratio"])
+            ],
+            "Projected": [
+                _fmt_num(v, ".3f" if r else ".2f")
+                for v, r in zip(display["projection"], display["is_ratio"])
+            ],
+            "vs Maintain": display["maintain_label"],
+            "vs Stretch": display["stretch_label"],
+            "Recommendation": display["recommendation"],
+            "Noise floor": display["noise_floor_raw"].map(
+                lambda v: _fmt_num(v, ".3f")
+            ),
+            "Tied teams": display["teams_at_current_points"],
+        }
+    )
+
+    st.markdown("### Targets vs expected lineup")
+    st.caption(
+        "**Projected** = starters from the Monday optimizer (neutral $). "
+        "**Recommendation** repeats the stretch comparison and shows "
+        "`no meaningful difference` when |gap| ≤ noise floor "
+        "(max of tie-cluster raw width and one raw unit)."
+    )
+    st.dataframe(view, use_container_width=True, hide_index=True)
+
+    with st.expander("How targets are built"):
+        st.markdown(
+            "- **Maintain**: counting stats use season pace "
+            "(`current_raw / weeks_elapsed`); ratios use the current rate.\n"
+            "- **Stretch +N**: counting adds `raw_gap_up_N / weeks_remaining` "
+            "to pace; ratios use the cutline rate for +N category points.\n"
+            "- **Noise floor**: `max(tie_cluster_raw_width, raw_unit_size)` so "
+            "fractional projections inside a point island are not ranked.\n"
+            "- Stand-alone leagues never enter this mart — they keep FAAB + "
+            "Lineup Optimizer only."
         )
