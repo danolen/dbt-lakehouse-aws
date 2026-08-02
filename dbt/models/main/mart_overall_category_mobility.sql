@@ -467,8 +467,9 @@ with_units as (
                 / nullif(raw_per_category_point, 0)
         end as overall_points_per_raw_unit
     from calc
-)
+),
 
+with_metrics as (
 select
     contest_key,
     source_league_key,
@@ -583,3 +584,21 @@ select
     end as count_equiv_up_100
 
 from with_units
+),
+
+with_cluster as (
+    select
+        wm.*,
+        pl.teams_at_level as teams_at_current_points,
+        pl.min_raw_at_level as raw_min_at_current_points,
+        pl.max_raw_at_level as raw_max_at_current_points,
+        cast(pl.max_raw_at_level - pl.min_raw_at_level as double) as tie_cluster_raw_width
+    from with_metrics wm
+    left join point_levels pl
+        on wm.contest_key = pl.contest_key
+        and wm.snapshot_date = pl.snapshot_date
+        and wm.category = pl.category
+        and wm.category_points = pl.point_level
+)
+
+select * from with_cluster
