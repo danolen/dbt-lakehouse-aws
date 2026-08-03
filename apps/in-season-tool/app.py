@@ -29,6 +29,7 @@ from lineup_weights import (
     weights_from_plan_rows,
 )
 from weekly_category_plan import (
+    CATEGORY_ORDER,
     DEFAULT_STRETCH,
     STRETCH_OPTIONS,
     build_category_plan_rows,
@@ -65,6 +66,7 @@ ATHENA_SCHEMA = get_config("ATHENA_SCHEMA", "dbt_main")
 # seeds have no +schema override so they land in the base profile schema
 # (e.g. `dbt`). Override via env/secret if that changes.
 ATHENA_SEEDS_SCHEMA = get_config("ATHENA_SEEDS_SCHEMA", "dbt")
+ATHENA_STAGE_SCHEMA = get_config("ATHENA_STAGE_SCHEMA", "dbt_stage")
 ATHENA_REGION = get_config("ATHENA_REGION", "us-east-1")
 ATHENA_S3_OUTPUT = get_config("ATHENA_S3_OUTPUT")
 
@@ -155,6 +157,63 @@ def load_weekly_category_plan(league):
     return _optimize_df(_connect().cursor().execute(query).as_pandas())
 
 
+@st.cache_data(ttl=900)
+def load_overall_overview(league):
+    """Latest NFBC overall overview snapshot for one contest (#189 §1)."""
+    query = f"""
+        SELECT
+            standing_rank,
+            owner,
+            team,
+            hitting_points,
+            pitching_points,
+            overall_points,
+            points_change,
+            rank_change,
+            snapshot_date,
+            source_league_key,
+            is_latest_snapshot
+        FROM {ATHENA_STAGE_SCHEMA}.stg_nfbc_in_season_overall_overview
+        WHERE source_league_key = '{league}'
+          AND is_latest_snapshot = true
+    """
+    return _optimize_df(_connect().cursor().execute(query).as_pandas())
+
+
+@st.cache_data(ttl=900)
+def load_category_mobility(league):
+    """Latest category mobility rows for one overall contest (#189 §2)."""
+    query = f"""
+        SELECT *
+        FROM {ATHENA_SCHEMA}.mart_overall_category_mobility
+        WHERE contest_key = '{league}'
+          AND is_latest_snapshot = true
+    """
+    return _optimize_df(_connect().cursor().execute(query).as_pandas())
+
+
+def _overall_game_type_id(league_cfg: pd.DataFrame, league: str):
+    """Return nfbc_overall_game_type_id when the league has an overall feed."""
+    cfg_row = league_cfg[league_cfg["league"] == league]
+    if cfg_row.empty:
+        return None
+    raw_id = cfg_row.iloc[0].get("nfbc_overall_game_type_id")
+    if raw_id is None or str(raw_id).strip() in ("", "nan", "None"):
+        return None
+    return raw_id
+
+
+def _fmt_signed(val, digits=1):
+    if val is None or (isinstance(val, float) and val != val):
+        return "—"
+    try:
+        num = float(val)
+    except (TypeError, ValueError):
+        return "—"
+    sign = "+" if num > 0 else ""
+    return f"{sign}{num:.{digits}f}"
+
+
 try:
     unmatched_df = load_unmatched()
 except Exception:
@@ -177,8 +236,8 @@ selected_league = st.sidebar.selectbox("Select League", list(LEAGUES.keys()))
 league_key = LEAGUES[selected_league]
 
 
-tab_faab, tab_lineup, tab_plan = st.tabs(
-    ["FAAB Worksheet", "Lineup Optimizer", "Weekly Plan"]
+tab_faab, tab_lineup, tab_overall = st.tabs(
+    ["FAAB Worksheet", "Lineup Optimizer", "Overall Standings"]
 )
 
 
@@ -1443,21 +1502,22 @@ with tab_lineup:
             "(mobility) and linearizes AVG/ERA/WHIP around season-to-date "
             "volume. Stand-alone leagues stay on Neutral.\n"
             "- **Related**: FAAB what-if is on the FAAB Worksheet tab (#187); "
-            "Weekly Plan compares Neutral expected totals to maintain/stretch "
-            "targets (#186)."
+            "Overall Standings packages rank/mobility and Weekly Plan "
+            "maintain/stretch targets (#189 / #186)."
         )
 
 
 # ---------------------------------------------------------------------------
-# Weekly Plan tab (#186) — overall contests only
+# Overall Standings tab (#189 §§1–3) — overall contests only
 # ---------------------------------------------------------------------------
 
-with tab_plan:
-    st.subheader(f"Weekly Category Plan — {selected_league}")
+with tab_overall:
+    st.subheader(f"Overall Standings — {selected_league}")
     st.caption(
-        "Maintain vs stretch targets for overall contests, compared to the "
-        "expected Monday lineup projection. Recommendation is suppressed when "
-        "the gap is inside the local tie-cluster noise floor."
+        "Current contest rank and category mobility for automated overall "
+        "feeds (OC, NFBC 50), plus Weekly Plan maintain/stretch vs the "
+        "expected Monday lineup. Projected Finish scenarios ship separately "
+        "after the projected-finish mart (#188)."
     )
 
     try:
@@ -1466,43 +1526,51 @@ with tab_plan:
         st.error(f"Failed to load league_config: {e}")
         st.stop()
 
-    cfg_row = league_cfg[league_cfg["league"] == league_key]
-    overall_id = None
-    if not cfg_row.empty:
-        raw_id = cfg_row.iloc[0].get("nfbc_overall_game_type_id")
-        if raw_id is not None and str(raw_id).strip() not in ("", "nan", "None"):
-            overall_id = raw_id
-
+    overall_id = _overall_game_type_id(league_cfg, league_key)
     if overall_id is None:
         st.info(
             f"`{selected_league}` is a stand-alone league (no overall "
-            "standings feed). Weekly category targets require an overall "
-            "contest — use the Lineup Optimizer for sit/start here. "
+            "standings feed). Overall Standings and Weekly Plan require an "
+            "overall contest — use the Lineup Optimizer for sit/start here. "
             "Overall leagues: OC and NFBC 50."
         )
         st.stop()
 
     try:
+        overview_df = load_overall_overview(league_key)
+        mobility_df = load_category_mobility(league_key)
         plan_df = load_weekly_category_plan(league_key)
         lineup_df = load_lineup_inputs(league_key)
         slots_df = load_roster_slots()
     except Exception as e:
         st.error(
-            f"Failed to load weekly plan data: {e}\n\n"
-            "Confirm `dbt seed --select season_scoring_calendar` and "
-            "`dbt build --select mart_weekly_category_plan` have run."
+            f"Failed to load overall standings data: {e}\n\n"
+            "Confirm overall overview / mobility / weekly plan marts are "
+            "built for this contest."
         )
         st.stop()
 
-    if plan_df.empty:
+    if overview_df.empty and mobility_df.empty and plan_df.empty:
         st.warning(
-            f"No rows in `mart_weekly_category_plan` for `{league_key}`. "
-            "Rebuild after mobility is fresh."
+            f"No overall overview, mobility, or weekly plan rows for "
+            f"`{league_key}`. Check the latest NFBC snapshot ingest."
         )
         st.stop()
 
-    team_options = sorted(plan_df["team_name"].dropna().unique().tolist())
-    # Prefer the roster owner label when it matches a standings team name.
+    # Team identity: prefer roster owner labels that match standings team
+    # names (e.g. Nolen OC), not current overall rank (#189 AC).
+    team_options = []
+    if not plan_df.empty and "team_name" in plan_df.columns:
+        team_options = sorted(plan_df["team_name"].dropna().unique().tolist())
+    elif not mobility_df.empty and "team" in mobility_df.columns:
+        team_options = sorted(mobility_df["team"].dropna().unique().tolist())
+    elif not overview_df.empty and "team" in overview_df.columns:
+        team_options = sorted(overview_df["team"].dropna().unique().tolist())
+
+    if not team_options:
+        st.warning("No standings teams found for this contest.")
+        st.stop()
+
     lineup_owners = set()
     if not lineup_df.empty and "owner" in lineup_df.columns:
         lineup_owners = set(
@@ -1515,8 +1583,230 @@ with tab_plan:
         "Overall team",
         team_options,
         index=default_idx,
-        key="plan_team",
+        key="overall_team",
+        help=(
+            "Matched by team name / roster owner identity, not by current "
+            "rank."
+        ),
     )
+
+    # ------------------------------------------------------------------
+    # §1 Current overall rank / points / recent change
+    # ------------------------------------------------------------------
+    st.markdown("### Current standings")
+    my_overview = overview_df[overview_df["team"] == selected_team]
+    if my_overview.empty and "owner" in overview_df.columns:
+        # Rare fallback: some feeds may only match on owner label.
+        my_overview = overview_df[overview_df["owner"] == selected_team]
+
+    if my_overview.empty:
+        st.warning(
+            f"No overview row for team `{selected_team}` in the latest "
+            f"`stg_nfbc_in_season_overall_overview` snapshot. Mobility / "
+            "Weekly Plan below may still load."
+        )
+    else:
+        row = my_overview.iloc[0]
+        snap = row.get("snapshot_date")
+        owner_label = row.get("owner") or "—"
+        st.caption(
+            f"**{selected_team}** · owner `{owner_label}` · overview "
+            f"snapshot `{snap}` · contest `{league_key}`"
+        )
+        c1, c2, c3, c4, c5 = st.columns(5)
+        rank_val = row.get("standing_rank")
+        c1.metric(
+            "Overall Rank",
+            (
+                f"{int(rank_val)}"
+                if rank_val is not None and rank_val == rank_val
+                else "—"
+            ),
+            delta=(
+                None
+                if row.get("rank_change") is None
+                or (
+                    isinstance(row.get("rank_change"), float)
+                    and row.get("rank_change") != row.get("rank_change")
+                )
+                else f"{int(row.get('rank_change')):+d} rank"
+            ),
+        )
+        c2.metric(
+            "Hitting Pts",
+            _fmt_signed(row.get("hitting_points"), 1).lstrip("+"),
+        )
+        c3.metric(
+            "Pitching Pts",
+            _fmt_signed(row.get("pitching_points"), 1).lstrip("+"),
+        )
+        c4.metric(
+            "Total Pts",
+            _fmt_signed(row.get("overall_points"), 1).lstrip("+"),
+            delta=(
+                None
+                if row.get("points_change") is None
+                or (
+                    isinstance(row.get("points_change"), float)
+                    and row.get("points_change") != row.get("points_change")
+                )
+                else f"{float(row.get('points_change')):+.1f} pts"
+            ),
+        )
+        rc = row.get("rank_change")
+        pc = row.get("points_change")
+        c5.metric(
+            "Recent change",
+            (
+                f"{_fmt_signed(pc, 1)} pts"
+                if pc is not None
+                and not (isinstance(pc, float) and pc != pc)
+                else "—"
+            ),
+            delta=(
+                None
+                if rc is None
+                or (isinstance(rc, float) and rc != rc)
+                else f"{int(rc):+d} rank"
+            ),
+            help=(
+                "NFBC overview `points_change` / `rank_change` vs the prior "
+                "snapshot in the feed (not vs a hand-picked baseline)."
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # §2 Category mobility grid
+    # ------------------------------------------------------------------
+    st.markdown("### Category mobility")
+    st.caption(
+        "Cutline mobility from `mart_overall_category_mobility` — **not** the "
+        "official category standings table. Gaps are raw-stat distance to the "
+        "next distinct points island and to ±10 category points on the ladder. "
+        "**Pts / raw unit** is the Team-fit weight used elsewhere."
+    )
+
+    my_mob = mobility_df[mobility_df["team"] == selected_team]
+    if my_mob.empty:
+        st.warning(
+            f"No latest mobility rows for `{selected_team}`. Rebuild "
+            "`mart_overall_category_mobility` after the overview ingest."
+        )
+    else:
+        mob_snap = my_mob.iloc[0].get("snapshot_date")
+        st.caption(f"Mobility snapshot `{mob_snap}`")
+
+        def _mob_fmt(val, is_ratio):
+            if val is None or (isinstance(val, float) and val != val):
+                return "—"
+            try:
+                num = float(val)
+            except (TypeError, ValueError):
+                return "—"
+            return f"{num:.3f}" if is_ratio else f"{num:.1f}"
+
+        order_index = {c: i for i, c in enumerate(CATEGORY_ORDER)}
+        mob_sorted = my_mob.copy()
+        mob_sorted["_ord"] = mob_sorted["category"].map(
+            lambda c: order_index.get(c, 99)
+        )
+        mob_sorted = mob_sorted.sort_values(["_ord", "category"])
+
+        mob_view = pd.DataFrame(
+            {
+                "Category": mob_sorted["category"],
+                "Current": [
+                    _mob_fmt(v, bool(r))
+                    for v, r in zip(
+                        mob_sorted["raw_stat"], mob_sorted["is_ratio"]
+                    )
+                ],
+                "Cat pts": mob_sorted["category_points"].map(
+                    lambda v: _mob_fmt(v, False)
+                ),
+                "Cat rank": mob_sorted["category_rank"].map(
+                    lambda v: (
+                        f"{int(v)}"
+                        if v is not None and v == v
+                        else "—"
+                    )
+                ),
+                "Raw → next pts ↑": [
+                    _mob_fmt(v, bool(r))
+                    for v, r in zip(
+                        mob_sorted["raw_gap_above"], mob_sorted["is_ratio"]
+                    )
+                ],
+                "Raw → next pts ↓": [
+                    _mob_fmt(v, bool(r))
+                    for v, r in zip(
+                        mob_sorted["raw_gap_below"], mob_sorted["is_ratio"]
+                    )
+                ],
+                "Raw for +10 pts": [
+                    _mob_fmt(v, bool(r))
+                    for v, r in zip(
+                        mob_sorted["raw_gap_up_10"], mob_sorted["is_ratio"]
+                    )
+                ],
+                "Raw for −10 pts": [
+                    _mob_fmt(v, bool(r))
+                    for v, r in zip(
+                        mob_sorted["raw_gap_down_10"], mob_sorted["is_ratio"]
+                    )
+                ],
+                "Pts / raw unit": mob_sorted[
+                    "overall_points_per_raw_unit"
+                ].map(
+                    lambda v: (
+                        f"{float(v):.2f}"
+                        if v is not None
+                        and not (isinstance(v, float) and v != v)
+                        else "—"
+                    )
+                ),
+                "Headroom": mob_sorted["headroom_status"],
+                "Tied teams": mob_sorted["teams_at_current_points"].map(
+                    lambda v: (
+                        f"{int(v)}"
+                        if v is not None and v == v
+                        else "—"
+                    )
+                ),
+            }
+        )
+        st.dataframe(mob_view, use_container_width=True, hide_index=True)
+        with st.expander("How to read mobility"):
+            st.markdown(
+                "- **Current / Cat pts / Cat rank**: season-to-date category "
+                "stat and contest points for *this* team.\n"
+                "- **Raw → next pts ↑/↓**: raw needed to leave the current "
+                "points island for the adjacent distinct island.\n"
+                "- **Raw for ±10 pts**: ladder distance on the primary "
+                "decision rung (not ±1/±5).\n"
+                "- **Pts / raw unit**: reciprocal slope used by Team-fit "
+                "lineup weights and FAAB what-if.\n"
+                "- **Headroom**: `open` / `partial` / `maxed` when near the "
+                "field edge (#205)."
+            )
+
+    # ------------------------------------------------------------------
+    # §3 Weekly Plan (from #186) — maintain / stretch vs expected lineup
+    # ------------------------------------------------------------------
+    st.markdown("### Weekly Plan")
+    st.caption(
+        "Maintain vs stretch targets compared to the expected Monday lineup "
+        "projection. Recommendation is suppressed when the gap is inside the "
+        "local tie-cluster noise floor."
+    )
+
+    if plan_df.empty:
+        st.warning(
+            f"No rows in `mart_weekly_category_plan` for `{league_key}`. "
+            "Rebuild after mobility is fresh."
+        )
+        st.stop()
+
     stretch_points = st.radio(
         "Stretch target (overall category points)",
         options=list(STRETCH_OPTIONS),
@@ -1542,16 +1832,12 @@ with tab_plan:
     m3.metric("Weeks Elapsed", f"{int(meta['weeks_elapsed'])}")
     m4.metric("Weeks Remaining", f"{int(meta['weeks_remaining'])}")
     st.caption(
-        f"Snapshot {meta.get('snapshot_date')} · season "
+        f"Plan snapshot {meta.get('snapshot_date')} · season "
         f"{int(meta['season_scoring_periods'])} scoring periods from "
         f"{meta.get('season_start_date')} (see `season_scoring_calendar` seed)."
     )
 
-    # Expected lineup (Monday lock) for the matching roster owner, if any.
     roster_owner = selected_team if selected_team in lineup_owners else None
-    if roster_owner is None and preferred:
-        # Fall back: only when the selected standings team isn't a roster label.
-        roster_owner = None
 
     result = None
     if roster_owner is None:
@@ -1662,7 +1948,7 @@ with tab_plan:
         }
     )
 
-    st.markdown("### Targets vs expected lineup")
+    st.markdown("#### Targets vs expected lineup")
     st.caption(
         "**Projected** = starters from the Monday optimizer (neutral $). "
         "**Recommendation** repeats the stretch comparison and shows "
