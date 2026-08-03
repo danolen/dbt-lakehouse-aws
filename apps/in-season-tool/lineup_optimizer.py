@@ -474,6 +474,154 @@ def aggregate_totals(starters: Iterable[Assignment]) -> dict[str, float | None]:
     return totals
 
 
+_HITTER_STAT_KEYS = (*HITTER_COUNTING, "hits", "ab")
+_MT_STAT_FIELDS = {
+    "r": "mt_r",
+    "hr": "mt_hr",
+    "rbi": "mt_rbi",
+    "sb": "mt_sb",
+    "hits": "mt_hits",
+    "ab": "mt_ab",
+}
+_FS_STAT_FIELDS = {
+    "r": "fs_r",
+    "hr": "fs_hr",
+    "rbi": "fs_rbi",
+    "sb": "fs_sb",
+    "hits": "fs_hits",
+    "ab": "fs_ab",
+}
+
+
+def _period_hitter_stat(player: Mapping[str, Any], key: str, half: str) -> float:
+    """Mon–Thu (``mt_``) or Fri–Sun (``fs_``) component with safe fallbacks.
+
+    Fallbacks avoid double-counting a full-week projection across both halves:
+    - Prefer the half-specific field when present.
+    - Else, if the other half is present, use ``max(0, full - other)``.
+    - Else use the full-week field only for the Monday half (legacy single-window).
+    """
+    fields = _MT_STAT_FIELDS if half == "mt" else _FS_STAT_FIELDS
+    other_fields = _FS_STAT_FIELDS if half == "mt" else _MT_STAT_FIELDS
+    preferred = _opt_num(player.get(fields[key]))
+    if preferred is not None:
+        return preferred
+
+    full = _opt_num(player.get(key))
+    other = _opt_num(player.get(other_fields[key]))
+    if full is not None and other is not None:
+        return max(0.0, full - other)
+    if half == "mt" and full is not None:
+        return full
+    return 0.0
+
+
+def aggregate_split_week_totals(
+    monday: LineupResult,
+    friday: LineupResult,
+) -> dict[str, float | None]:
+    """Combine Mon–Thu hitter starters + Fri–Sun hitter starters + Monday pitchers.
+
+    Pitchers are Monday-locked for the full NFBC week, so they are taken only
+    from ``monday``. Hitter counting/AVG use period components (``mt_*`` /
+    ``fs_*``) so a bat started only Mon–Thu does not also get weekend volume.
+    """
+    totals: dict[str, float | None] = {
+        "r": 0.0, "hr": 0.0, "rbi": 0.0, "sb": 0.0,
+        "hits": 0.0, "ab": 0.0,
+        "k": 0.0, "w": 0.0, "sv": 0.0,
+        "ip": 0.0, "er": 0.0, "hits_allowed": 0.0, "walks_allowed": 0.0,
+    }
+
+    for a in monday.starters:
+        p = a.player
+        if _row_type(p) == "hitter":
+            for key in _HITTER_STAT_KEYS:
+                totals[key] = (totals[key] or 0.0) + _period_hitter_stat(p, key, "mt")
+        else:
+            for key in (*PITCHER_COUNTING, "ip", "er", "hits_allowed", "walks_allowed"):
+                totals[key] = (totals[key] or 0.0) + _num(p.get(key))
+
+    for a in friday.starters:
+        p = a.player
+        if _row_type(p) != "hitter":
+            continue
+        for key in _HITTER_STAT_KEYS:
+            totals[key] = (totals[key] or 0.0) + _period_hitter_stat(p, key, "fs")
+
+    ab = totals["ab"] or 0.0
+    ip = totals["ip"] or 0.0
+    totals["avg"] = (totals["hits"] / ab) if ab > 0 else None
+    totals["era"] = ((totals["er"] * 9.0) / ip) if ip > 0 else None
+    totals["whip"] = (
+        ((totals["hits_allowed"] + totals["walks_allowed"]) / ip) if ip > 0 else None
+    )
+    return totals
+
+
+def _locked_pitchers(monday: LineupResult) -> list[dict[str, Any]]:
+    return [dict(a.player) for a in monday.starters if a.slot == PITCHER_SLOT]
+
+
+def optimize_split_week(
+    players: Iterable[Mapping[str, Any]],
+    slot_counts: Mapping[str, int],
+    **kwargs: Any,
+) -> tuple[LineupResult, LineupResult]:
+    """Monday lock then Friday hitter re-optimize with pitchers locked."""
+    # Strip mode from kwargs so we control both windows explicitly.
+    kw = {k: v for k, v in kwargs.items() if k != "mode"}
+    monday = optimize_week(players, slot_counts, mode="monday", **kw)
+    friday = optimize_week(
+        players,
+        slot_counts,
+        mode="friday",
+        locked_pitchers=_locked_pitchers(monday),
+        **kw,
+    )
+    return monday, friday
+
+
+def simulate_add_drop_split_week(
+    players: Iterable[Mapping[str, Any]],
+    slot_counts: Mapping[str, int],
+    *,
+    add: Mapping[str, Any] | None = None,
+    drop_key: tuple[Any, str] | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Baseline/what-if Monday + Friday lineups and combined week totals/$."""
+    kw = {k: v for k, v in kwargs.items() if k != "mode"}
+    roster = [dict(p) for p in players]
+    what_if_roster = (
+        [p for p in roster if _player_key(p) != drop_key] if drop_key else list(roster)
+    )
+    if add is not None:
+        what_if_roster.append(dict(add))
+
+    baseline_mon, baseline_fri = optimize_split_week(roster, slot_counts, **kw)
+    whatif_mon, whatif_fri = optimize_split_week(what_if_roster, slot_counts, **kw)
+
+    baseline_totals = aggregate_split_week_totals(baseline_mon, baseline_fri)
+    whatif_totals = aggregate_split_week_totals(whatif_mon, whatif_fri)
+
+    # Monday total_score includes pitchers; Friday total_score is hitters only.
+    net_weekly = (
+        (whatif_mon.total_score - baseline_mon.total_score)
+        + (whatif_fri.total_score - baseline_fri.total_score)
+    )
+
+    return {
+        "baseline_monday": baseline_mon,
+        "baseline_friday": baseline_fri,
+        "whatif_monday": whatif_mon,
+        "whatif_friday": whatif_fri,
+        "baseline_totals": baseline_totals,
+        "whatif_totals": whatif_totals,
+        "net_weekly_value": net_weekly,
+    }
+
+
 def _missing_projection_ids(
     players: Iterable[Mapping[str, Any]], score_field: str, weights: Mapping[str, float] | None
 ) -> list[Any]:

@@ -26,6 +26,7 @@ def hitter(nfbc_id, pos, dollars, **extra):
         "pos_array": list(pos),
         "dollars": dollars,
         "dollars_monday_thursday": dollars,
+        "dollars_friday_sunday": dollars,
     }
     player.update(extra)
     return player
@@ -93,7 +94,7 @@ def test_direct_upgrade_is_inspectable():
     assert result.baseline is not None and result.what_if is not None
     assert result.baseline.starter_ids() == {1}
     assert result.what_if.starter_ids() == {2}
-    assert result.net_weekly_value == pytest.approx(30.0)
+    assert result.net_weekly_value == pytest.approx(60.0)  # Mon–Thu + Fri–Sun
 
     base_tbl = starters_table(result.baseline)
     what_tbl = starters_table(result.what_if)
@@ -325,3 +326,96 @@ def test_auto_suggest_drop_picks_bench():
     assert result.drop_suggested
     assert result.drop_nfbc_id == 2
     assert result.what_if.starter_ids() == {3}
+
+
+def test_monday_only_start_uses_weekend_bat_for_friday():
+    """Pickup strong Mon–Thu / weak weekend → weekend starter stays the other bat."""
+    roster = [
+        hitter(
+            1,
+            ["OF"],
+            10.0,
+            dollars_monday_thursday=8.0,
+            dollars_friday_sunday=20.0,
+            r=4.0,
+            hr=1.0,
+            rbi=4.0,
+            sb=0.0,
+            hits=6.0,
+            ab=20.0,
+            mt_r=1.0,
+            mt_hr=0.0,
+            mt_rbi=1.0,
+            mt_sb=0.0,
+            mt_hits=2.0,
+            mt_ab=8.0,
+            fs_r=3.0,
+            fs_hr=1.0,
+            fs_rbi=3.0,
+            fs_sb=0.0,
+            fs_hits=4.0,
+            fs_ab=12.0,
+        ),
+        hitter(
+            2,
+            ["OF"],
+            1.0,
+            dollars_monday_thursday=1.0,
+            dollars_friday_sunday=1.0,
+            r=0.0,
+            hits=0.0,
+            ab=5.0,
+            mt_r=0.0,
+            mt_hits=0.0,
+            mt_ab=2.0,
+            fs_r=0.0,
+            fs_hits=0.0,
+            fs_ab=3.0,
+        ),
+    ]
+    add = hitter(
+        10,
+        ["OF"],
+        15.0,
+        dollars_monday_thursday=25.0,
+        dollars_friday_sunday=2.0,
+        r=5.0,
+        hr=2.0,
+        rbi=5.0,
+        sb=1.0,
+        hits=8.0,
+        ab=20.0,
+        mt_r=4.0,
+        mt_hr=2.0,
+        mt_rbi=4.0,
+        mt_sb=1.0,
+        mt_hits=6.0,
+        mt_ab=12.0,
+        fs_r=1.0,
+        fs_hr=0.0,
+        fs_rbi=1.0,
+        fs_sb=0.0,
+        fs_hits=2.0,
+        fs_ab=8.0,
+    )
+
+    result = analyze_add_drop(
+        roster,
+        {"OF": 1},
+        add=add,
+        drop_key=(2, "hitter"),
+        auto_suggest_drop=False,
+        plan_rows=FULL_PLAN,
+    )
+    assert result.ok
+    assert result.what_if.starter_ids() == {10}  # Monday
+    assert result.what_if_friday is not None
+    assert result.what_if_friday.starter_ids() == {1}  # Friday swaps back
+    assert result.starts_monday_only
+
+    by_cat = {d.category: d for d in result.category_deltas}
+    # Baseline: player 1 both halves → mt + fs R = 1+3 = 4
+    # What-if: add Mon (4 R) + player 1 Fri (3 R) = 7
+    assert by_cat["R"].baseline == pytest.approx(4.0)
+    assert by_cat["R"].what_if == pytest.approx(7.0)
+    assert by_cat["R"].delta_raw == pytest.approx(3.0)

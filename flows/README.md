@@ -125,16 +125,24 @@ wordpress_logged_in_...=...; wordpress_sec_...=...
 
 Analytics / Cloudflare cookies are not required.
 
-**Schedules (two deployments, one flow):**
+**Schedules (one deployment, all four slices):**
 
 | Deployment | Slices | Cron (America/New_York) |
 |------------|--------|-------------------------|
-| `razzball-weekly-managed` | weekly hitting + pitching + Mon–Thu hitting | 8 AM, 12 PM, 4 PM, 8 PM on Sat, Sun, Mon |
-| `razzball-weekend-managed` | weekend hitting only | 8 AM, 12 PM, 4 PM, 8 PM on Thu, Fri |
+| `razzball-weekly-managed` | weekly hitting + pitching + Mon–Thu + weekend hitting | 8 AM, 12 PM, 4 PM, 8 PM on **Thu, Fri, Sat, Sun, Mon** |
 
-Mon–Thu is folded into the weekly deployment (not a third scheduled
-deployment) to stay within the Prefect Cloud Hobby deployment cap. For a
-midweek Mon–Thu-only refresh, run:
+Weekend hitting used to be a separate Thu/Fri-only deployment
+(`razzball-weekend-managed`). That was right for Friday moves against the
+upcoming weekend, but by Sunday/Monday the same page has rolled onto the
+weekend that already happened — too stale for Monday FAAB what-if, which
+needs Fri–Sun volume for the week being planned. Merging weekend into the
+weekly deployment on Thu–Mon keeps Friday-swap freshness and Monday what-if
+accuracy, and frees a Hobby deployment slot.
+
+After redeploying, **delete** the old Cloud deployment
+`razzball-weekend-managed` if it still exists.
+
+For a single-slice refresh:
 
 ```bash
 python flows/razzball_weekly.py --monday-thursday-hitting-only
@@ -287,17 +295,16 @@ prefect deploy --name nfbc-in-season-managed
 prefect deploy --name fangraphs-ros-managed
 prefect deploy --name ftn-faab-managed
 prefect deploy --name razzball-weekly-managed
-prefect deploy --name razzball-weekend-managed
 prefect deployment run "nfbc-in-season/nfbc-in-season-managed"
 prefect deployment run "fangraphs-ros/fangraphs-ros-managed"
 prefect deployment run "ftn-faab/ftn-faab-managed"
 prefect deployment run "razzball-weekly/razzball-weekly-managed"
-prefect deployment run "razzball-weekly/razzball-weekend-managed"
 ```
 
-> Hobby tier allows **5 deployments**. Undeploy `hello-world/hello-managed`
-> before deploying both Razzball flows — nfbc + fangraphs + ftn +
-> razzball-weekly + razzball-weekend fills the cap.
+> Hobby tier allows **5 deployments**. With weekend folded into
+> `razzball-weekly-managed`, the five are: hello + nfbc + fangraphs + ftn +
+> razzball-weekly. **Delete** any leftover `razzball-weekend-managed` in Cloud
+> after redeploying so it does not keep firing the old Thu/Fri-only schedule.
 
 ## Later: Option B/C — AWS ECS / Fargate
 
