@@ -21,6 +21,13 @@ from faab_what_if import (
     starters_table,
 )
 from lineup_optimizer import optimize_week
+from lineup_weights import (
+    OBJECTIVE_NEUTRAL,
+    OBJECTIVE_TEAM_FIT,
+    ratio_context_from_plan_rows,
+    team_fit_inputs_ready,
+    weights_from_plan_rows,
+)
 from weekly_category_plan import (
     DEFAULT_STRETCH,
     STRETCH_OPTIONS,
@@ -900,6 +907,94 @@ with tab_lineup:
         key="lineup_mode",
     )
 
+    # Objective: Neutral $ (default) vs Team-fit overall-pts weights (#218).
+    plan_df_lineup = pd.DataFrame()
+    try:
+        plan_df_lineup = load_weekly_category_plan(league_key)
+    except Exception:
+        plan_df_lineup = pd.DataFrame()
+
+    team_options_plan = []
+    if not plan_df_lineup.empty and "team_name" in plan_df_lineup.columns:
+        team_options_plan = sorted(
+            plan_df_lineup["team_name"].dropna().unique().tolist()
+        )
+
+    objective = OBJECTIVE_NEUTRAL
+    weights = None
+    ratio_context = None
+    plan_team = None
+
+    if not team_options_plan:
+        st.caption(
+            "Team-fit (overall pts) is unavailable — no weekly category plan "
+            "/ mobility rows for this league (stand-alone or not built). "
+            "Neutral Razzball `$` scoring is used."
+        )
+    else:
+        obj_choice = st.radio(
+            "Scoring objective",
+            options=[OBJECTIVE_NEUTRAL, OBJECTIVE_TEAM_FIT],
+            format_func=lambda m: (
+                "Neutral (Razzball $)"
+                if m == OBJECTIVE_NEUTRAL
+                else "Team-fit (overall pts / mobility)"
+            ),
+            horizontal=True,
+            key="lineup_objective",
+            help=(
+                "Neutral maximizes period `$`. Team-fit weights each raw "
+                "projection unit by overall_points_per_raw_unit for the "
+                "selected standings team."
+            ),
+        )
+        preferred_plan = [t for t in team_options_plan if t == selected_owner]
+        plan_team = st.selectbox(
+            "Overall standings team (for Team-fit weights)",
+            team_options_plan,
+            index=(
+                team_options_plan.index(preferred_plan[0])
+                if preferred_plan
+                else 0
+            ),
+            key="lineup_plan_team",
+            disabled=(obj_choice != OBJECTIVE_TEAM_FIT),
+        )
+        if obj_choice == OBJECTIVE_TEAM_FIT:
+            plan_rows = plan_df_lineup.loc[
+                plan_df_lineup["team_name"] == plan_team
+            ].to_dict(orient="records")
+            weights = weights_from_plan_rows(plan_rows)
+            ratio_context = ratio_context_from_plan_rows(plan_rows)
+            ready, ready_msg = team_fit_inputs_ready(weights, ratio_context)
+            if not ready:
+                st.warning(
+                    f"Team-fit unavailable for `{plan_team}`: {ready_msg} "
+                    "Falling back to Neutral `$`."
+                )
+                weights = None
+                ratio_context = None
+                objective = OBJECTIVE_NEUTRAL
+            else:
+                objective = OBJECTIVE_TEAM_FIT
+                with st.expander("Team-fit weights (pts per raw unit)", expanded=False):
+                    wrows = [
+                        {"category": k.upper(), "pts / unit": v}
+                        for k, v in sorted(weights.items())
+                    ]
+                    st.dataframe(
+                        pd.DataFrame(wrows),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                    st.caption(
+                        f"Ratio context: hits={ratio_context.get('hits')}, "
+                        f"AB={ratio_context.get('at_bats')}, "
+                        f"ER={ratio_context.get('earned_runs')}, "
+                        f"IP={ratio_context.get('innings_pitched')}, "
+                        f"BB+H={ratio_context.get('walks_hits_allowed')}."
+                    )
+
     slot_counts = dict(hitter_slot_counts)
     if lineup_mode == "monday":
         slot_counts.update(pitcher_slot_counts)
@@ -935,11 +1030,19 @@ with tab_lineup:
         st.stop()
 
     players = team_all.to_dict(orient="records")
+    opt_kwargs = {}
+    if objective == OBJECTIVE_TEAM_FIT and weights is not None:
+        opt_kwargs["weights"] = weights
+        opt_kwargs["ratio_context"] = ratio_context
 
     if lineup_mode == "friday":
         # Pitchers were locked Monday; carry the Monday set through untouched.
+        # Use the same objective so Team-fit Monday pitchers stay locked.
         monday = optimize_week(
-            players, {**hitter_slot_counts, **pitcher_slot_counts}, mode="monday"
+            players,
+            {**hitter_slot_counts, **pitcher_slot_counts},
+            mode="monday",
+            **opt_kwargs,
         )
         locked_pitchers = [
             a.player for a in monday.starters if a.slot == "P"
@@ -949,16 +1052,41 @@ with tab_lineup:
             slot_counts,
             mode="friday",
             locked_pitchers=locked_pitchers,
+            **opt_kwargs,
         )
     else:
-        result = optimize_week(players, slot_counts, mode="monday")
+        result = optimize_week(
+            players, slot_counts, mode="monday", **opt_kwargs
+        )
 
     active_capacity = sum(slot_counts.values())
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Week Of", str(week_of))
     c2.metric("Team Hitters", len(team))
     c3.metric("Active Slots", active_capacity)
-    c4.metric("Projected $", f"{result.total_score:.1f}")
+    if objective == OBJECTIVE_TEAM_FIT:
+        c4.metric(
+            "Team-fit score",
+            f"{result.total_score:.1f}",
+            help=(
+                "Sum of overall-points contributions from the active "
+                f"starters for standings team `{plan_team}`. Not Razzball $."
+            ),
+        )
+    else:
+        c4.metric("Projected $", f"{result.total_score:.1f}")
+
+    if objective == OBJECTIVE_TEAM_FIT:
+        st.info(
+            f"**Objective: Team-fit (overall pts)** for `{plan_team}`. "
+            "Starters maximize mobility-weighted category contribution, not "
+            "Razzball `$`. Toggle Scoring objective to Neutral to compare."
+        )
+    else:
+        st.caption(
+            "**Objective: Neutral (Razzball $)** — Monday uses Mon–Thu hitter "
+            "$; Friday uses Fri–Sun hitter $; pitchers use full-week $."
+        )
 
     # Monday lock scores/displays Mon–Thu hitter components when present (#210).
     use_mt = lineup_mode == "monday"
@@ -1309,9 +1437,14 @@ with tab_lineup:
             "- **Utility Advantage**: when two hitters are equally valuable, "
             "the less flexible one takes the exact slot so the multi-position "
             "bat stays available for UTIL/MI/CI.\n"
-            "- **Next**: FAAB add/drop what-if lives on the FAAB Worksheet "
-            "tab (#187); category weighting from overall mobility feeds the "
-            "Weekly Plan tab (#186)."
+            "- **Scoring objective (#218)**: Neutral maximizes Razzball `$`. "
+            "Team-fit multiplies each raw projection unit by "
+            "`overall_points_per_raw_unit` from the weekly category plan "
+            "(mobility) and linearizes AVG/ERA/WHIP around season-to-date "
+            "volume. Stand-alone leagues stay on Neutral.\n"
+            "- **Related**: FAAB what-if is on the FAAB Worksheet tab (#187); "
+            "Weekly Plan compares Neutral expected totals to maintain/stretch "
+            "targets (#186)."
         )
 
 
