@@ -431,10 +431,12 @@ with tab_faab:
     st.markdown("---")
     st.subheader("FAAB what-if")
     st.caption(
-        "Value a free-agent add by the change to your optimized Monday lineup, "
-        "not the candidate's standalone weekly $. Bench-only adds report zero "
-        "immediate starter impact. Uncertainty labels use the local noise floor "
-        "from the weekly category plan when available."
+        "Value a free-agent add by the change to your optimized week: Monday "
+        "lock (Mon–Thu hitter $ + week pitchers) then Friday hitter re-optimize "
+        "(Fri–Sun $) with pitchers locked. A bat started only Mon–Thu does not "
+        "also get weekend volume — the Friday lineup’s stats are used instead. "
+        "Uncertainty labels use the local noise floor from the weekly category "
+        "plan when available."
     )
 
     try:
@@ -765,18 +767,59 @@ with tab_faab:
 
                         left, right = st.columns(2)
                         with left:
-                            st.markdown("#### Baseline starters")
+                            st.markdown("#### Baseline — Monday lock")
                             st.dataframe(
-                                pd.DataFrame(starters_table(detail.baseline)),
+                                pd.DataFrame(
+                                    starters_table(
+                                        detail.baseline,
+                                        dollar_field="dollars_monday_thursday",
+                                    )
+                                ),
                                 use_container_width=True,
                                 hide_index=True,
                             )
                         with right:
-                            st.markdown("#### What-if starters")
+                            st.markdown("#### What-if — Monday lock")
                             st.dataframe(
-                                pd.DataFrame(starters_table(detail.what_if)),
+                                pd.DataFrame(
+                                    starters_table(
+                                        detail.what_if,
+                                        dollar_field="dollars_monday_thursday",
+                                    )
+                                ),
                                 use_container_width=True,
                                 hide_index=True,
+                            )
+
+                        if detail.baseline_friday is not None and detail.what_if_friday is not None:
+                            l2, r2 = st.columns(2)
+                            with l2:
+                                st.markdown("#### Baseline — Friday swap")
+                                st.dataframe(
+                                    pd.DataFrame(
+                                        starters_table(
+                                            detail.baseline_friday,
+                                            dollar_field="dollars_friday_sunday",
+                                        )
+                                    ),
+                                    use_container_width=True,
+                                    hide_index=True,
+                                )
+                            with r2:
+                                st.markdown("#### What-if — Friday swap")
+                                st.dataframe(
+                                    pd.DataFrame(
+                                        starters_table(
+                                            detail.what_if_friday,
+                                            dollar_field="dollars_friday_sunday",
+                                        )
+                                    ),
+                                    use_container_width=True,
+                                    hide_index=True,
+                                )
+                            st.caption(
+                                "Pitchers are locked from Monday. Friday tables "
+                                "show hitter re-optimization on Fri–Sun $."
                             )
 
 

@@ -29,7 +29,11 @@ select
         coalesce(nullif(mt.dollars, ''), nullif(hit.dollars_monday_thursday, ''))
         as double
     ) as dollars_monday_thursday,
-    cast(nullif(hit.dollars_friday_sunday, '') as double) dollars_friday_sunday,
+    -- Prefer dedicated Fri–Sun Hittertron $; fall back to weekly-file $ FS.
+    cast(
+        coalesce(nullif(we.dollars, ''), nullif(hit.dollars_friday_sunday, ''))
+        as double
+    ) as dollars_friday_sunday,
     cast(coalesce(nullif(hit.roster_pct, ''), nullif(pitch.roster_pct, '')) as int) roster_pct,
     cast(coalesce(nullif(hit.ros12_dollars_per_game, ''), nullif(pitch.ros12_dollars_per_game, '')) as double) ros12_dollars_per_game,
     cast(coalesce(nullif(hit.rfs12, ''), nullif(pitch.rfs12, '')) as int) rfs12,
@@ -68,6 +72,26 @@ select
     cast(nullif(mt.so, '') as double) as mt_so,
     cast(nullif(mt.avg, '') as double) as mt_batting_avg,
 
+    -- Fri–Sun hitter components from weekend scrape (#187 split-week what-if).
+    cast(nullif(we.num_g, '') as int) as fs_num_g,
+    cast(nullif(we.hg, '') as int) as fs_home_games,
+    cast(nullif(we.ag, '') as int) as fs_away_games,
+    cast(nullif(we.vr, '') as int) as fs_vs_rhp,
+    cast(nullif(we.vl, '') as int) as fs_vs_lhp,
+    nullif(we.opp, '') as fs_opp,
+    nullif(we.sp, '') as fs_sp,
+    cast(nullif(we.g, '') as double) as fs_hit_g,
+    cast(nullif(we.pa, '') as double) as fs_pa,
+    cast(nullif(we.ab, '') as double) as fs_ab,
+    cast(nullif(we.h, '') as double) as fs_hits,
+    cast(nullif(we.r, '') as double) as fs_r,
+    cast(nullif(we.hr, '') as double) as fs_hr,
+    cast(nullif(we.rbi, '') as double) as fs_rbi,
+    cast(nullif(we.sb, '') as double) as fs_sb,
+    cast(nullif(we.bb, '') as double) as fs_bb,
+    cast(nullif(we.so, '') as double) as fs_so,
+    cast(nullif(we.avg, '') as double) as fs_batting_avg,
+
     -- Weekly pitcher component stats (#58). Null when no weekly pitching file row.
     nullif(pitch.pos, '') as pitcher_pos,
     nullif(pitch.opp, '') as pitcher_opp,
@@ -90,6 +114,7 @@ select
     (hit.nfbcid is not null) as has_weekly_hitting,
     (pitch.nfbcid is not null) as has_weekly_pitching,
     (mt.nfbcid is not null) as has_monday_thursday_hitting,
+    (we.nfbcid is not null) as has_weekend_hitting,
 
     p50.value pre_szn_50,
     poc.value pre_szn_oc,
@@ -104,6 +129,8 @@ left join {{ ref('src_razzball_projections_weekly_pitching') }} pitch
     on nfbc.id = pitch.nfbcid
 left join {{ ref('src_razzball_projections_monday_thursday_hitting') }} mt
     on nfbc.id = mt.nfbcid
+left join {{ ref('src_razzball_projections_weekend_hitting') }} we
+    on nfbc.id = we.nfbcid
 left join {{ ref('mart_preseason_overall_rankings_50s') }} p50
     on nfbc.id = p50.id
 left join {{ ref('mart_preseason_overall_rankings_oc') }} poc

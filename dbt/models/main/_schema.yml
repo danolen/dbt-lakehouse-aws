@@ -44,7 +44,9 @@ models:
       numerators; pitcher rows carry G/GS, first_start_day, is_two_start,
       W/SV/K/IP and ratio numerators (hits_allowed, er, walks_allowed).
       Mon–Thu dollars and ``mt_*`` hitter components support Monday lock (#210).
-      Existing hitter eligibility flags are unchanged for UI compatibility.
+      Fri–Sun ``fs_*`` components support Friday swap and split-week FAAB
+      what-if (#187). Existing hitter eligibility flags are unchanged for UI
+      compatibility.
     columns:
       - name: nfbc_id
         data_tests:
@@ -106,7 +108,8 @@ models:
       One row per (id, league). Carries weekly dollar values plus hitter and
       pitcher component stats when a Razzball weekly file row exists (#58).
       Mon–Thu dollars prefer the dedicated Hittertron scrape when present (#210);
-      full-week dollars remain for FAAB context.
+      Fri–Sun dollars prefer the weekend scrape when present. Full-week dollars
+      remain for FAAB context.
     columns:
       - name: id
         data_tests:
@@ -128,6 +131,8 @@ models:
         description: True when joined to the current weekly pitching file.
       - name: has_monday_thursday_hitting
         description: True when joined to the current Mon–Thu hitting scrape (#210).
+      - name: has_weekend_hitting
+        description: True when joined to the current Fri–Sun hitting scrape.
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:

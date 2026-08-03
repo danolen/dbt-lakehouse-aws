@@ -1,8 +1,10 @@
 """FAAB what-if: add/drop impact on expected weekly category totals (#187).
 
-Wraps ``lineup_optimizer.simulate_add_drop`` so a candidate is valued by the
-change to the team's optimized starters — not by the candidate's standalone
-projection. Bench-only adds correctly report zero immediate lineup impact.
+Wraps ``lineup_optimizer.simulate_add_drop_split_week`` so a candidate is
+valued by the change to the team's optimized starters across the full NFBC
+week — Monday lock (Mon–Thu hitters + week pitchers) then Friday hitter swap
+(Fri–Sun) with pitchers locked. Bench-only adds correctly report zero
+immediate lineup impact.
 
 Overall-points estimates and noise-floor ties use columns already present on
 ``mart_weekly_category_plan`` (from #186 / mobility).
@@ -13,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
-from lineup_optimizer import LineupResult, simulate_add_drop
+from lineup_optimizer import LineupResult, optimize_week, simulate_add_drop_split_week
 from weekly_category_plan import (
     CATEGORY_ORDER,
     gap_is_meaningful,
@@ -50,13 +52,17 @@ class WhatIfResult:
     drop_nfbc_id: Any = None
     drop_row_type: Optional[str] = None
     drop_suggested: bool = False
-    baseline: Optional[LineupResult] = None
-    what_if: Optional[LineupResult] = None
+    baseline: Optional[LineupResult] = None  # Monday lock
+    what_if: Optional[LineupResult] = None  # Monday lock
+    baseline_friday: Optional[LineupResult] = None
+    what_if_friday: Optional[LineupResult] = None
     net_weekly_value: float = 0.0
     category_deltas: list[CategoryDelta] = field(default_factory=list)
     net_overall_pts_estimate: Optional[float] = None
     any_within_noise: bool = False
     bench_only_add: bool = False
+    starts_monday_only: bool = False
+    starts_friday_only: bool = False
 
 
 def _row_type(player: Mapping[str, Any]) -> str:
@@ -94,11 +100,18 @@ def _dollars(player: Mapping[str, Any]) -> float:
     return 0.0
 
 
-def starters_table(result: LineupResult) -> list[dict[str, Any]]:
+def starters_table(
+    result: LineupResult, *, dollar_field: str = "dollars_monday_thursday"
+) -> list[dict[str, Any]]:
     """Inspectable starter rows for UI / tests."""
     rows: list[dict[str, Any]] = []
     for a in result.starters:
         p = a.player
+        dol = p.get(dollar_field)
+        try:
+            dol_f = float(dol) if dol is not None and dol == dol else _dollars(p)
+        except (TypeError, ValueError):
+            dol_f = _dollars(p)
         rows.append(
             {
                 "slot": a.slot,
@@ -106,7 +119,7 @@ def starters_table(result: LineupResult) -> list[dict[str, Any]]:
                 "player_name": p.get("player_name"),
                 "row_type": _row_type(p),
                 "pos_raw": p.get("pos_raw"),
-                "dollars": _dollars(p),
+                "dollars": dol_f,
             }
         )
     return rows
@@ -129,7 +142,7 @@ def compute_category_deltas(
 
     Counting stats: what_if - baseline on the summed projection.
     Ratios: difference of rates recomputed from summed H/AB, ER/IP, (H+BB)/IP
-    (already how ``aggregate_totals`` builds AVG/ERA/WHIP).
+    (already how split-week aggregates build AVG/ERA/WHIP).
     """
     by_cat = _plan_lookup(plan_rows)
     deltas: list[CategoryDelta] = []
@@ -169,7 +182,6 @@ def compute_category_deltas(
 
         d_pts: Optional[float] = None
         if delta_raw is not None and pts_per_f is not None and net_overall is not None:
-            # Favorable direction: more counting/AVG is good; less ERA/WHIP is good.
             signed = (
                 -float(delta_raw)
                 if cat in ("ERA", "WHIP")
@@ -212,18 +224,28 @@ def suggest_drop(
     """Suggest a drop key ``(nfbc_id, row_type)``.
 
     Prefers the lowest-$ owned player who remains on the bench after the add
-    is kept (no drop) — dropping them cannot change starters. Falls back to
+    is kept (no drop) across *both* Monday and Friday windows. Falls back to
     the lowest-$ owned player overall.
     """
     if not roster:
         return None, "No owned players to drop."
 
     add_key = _player_key(add)
-    # Roster + add, no drop — who stays on the bench?
-    _, with_add = simulate_add_drop(
-        roster, slot_counts, add=add, drop_key=None, **optimize_kwargs
+    kw = {k: v for k, v in optimize_kwargs.items() if k != "mode"}
+    with_add = list(roster) + [dict(add)]
+    monday = optimize_week(with_add, slot_counts, mode="monday", **kw)
+    friday = optimize_week(
+        with_add,
+        slot_counts,
+        mode="friday",
+        locked_pitchers=[
+            dict(a.player) for a in monday.starters if a.slot == "P"
+        ],
+        **kw,
     )
-    starter_keys = with_add.starter_keys()
+    starter_keys = monday.starter_keys() | {
+        k for k in friday.starter_keys() if k[1] == "hitter"
+    }
 
     owned = [dict(p) for p in roster if _player_key(p) != add_key]
     if not owned:
@@ -234,7 +256,7 @@ def suggest_drop(
     pool_sorted = sorted(pool, key=lambda p: (_dollars(p), str(p.get("nfbc_id"))))
     pick = pool_sorted[0]
     key = _player_key(pick)
-    label = "bench after add" if bench else "lowest-$ owned"
+    label = "bench both halves after add" if bench else "lowest-$ owned"
     return key, (
         f"Suggested drop: {pick.get('player_name') or key[0]} "
         f"({label}; ${_dollars(pick):.1f})"
@@ -256,7 +278,11 @@ def analyze_add_drop(
     plan_rows: Optional[Sequence[Mapping[str, Any]]] = None,
     **optimize_kwargs: Any,
 ) -> WhatIfResult:
-    """Baseline vs what-if lineups with category / overall-point deltas."""
+    """Baseline vs what-if lineups with category / overall-point deltas.
+
+    Runs Monday lock then Friday hitter re-optimize for both rosters so a
+    pickup started only Mon–Thu (or only Fri–Sun) is valued correctly.
+    """
     add_player = dict(add) if add is not None else None
     if add_player is None:
         pool = list(free_agents or []) + list(roster)
@@ -297,36 +323,49 @@ def analyze_add_drop(
                 add_nfbc_id=add_player.get("nfbc_id"),
             )
 
-    baseline, what_if = simulate_add_drop(
+    sim = simulate_add_drop_split_week(
         roster,
         slot_counts,
         add=add_player,
         drop_key=resolved_drop,
         **optimize_kwargs,
     )
+    baseline = sim["baseline_monday"]
+    what_if = sim["whatif_monday"]
+    baseline_fri = sim["baseline_friday"]
+    what_if_fri = sim["whatif_friday"]
+    net_weekly = float(sim["net_weekly_value"])
 
-    net_weekly = float(what_if.total_score) - float(baseline.total_score)
     cat_deltas, net_overall, any_within = compute_category_deltas(
-        baseline.totals or {},
-        what_if.totals or {},
+        sim["baseline_totals"],
+        sim["whatif_totals"],
         plan_rows=plan_rows,
     )
 
     add_id = add_player.get("nfbc_id")
-    add_starts = any(
-        a.player.get("nfbc_id") == add_id and _row_type(a.player) == _row_type(add_player)
-        for a in what_if.starters
-    )
-    bench_only = (
-        baseline.starter_keys() == what_if.starter_keys()
-        and baseline.totals == what_if.totals
-    ) or (not add_starts and abs(net_weekly) < 1e-12)
+    add_key = _player_key(add_player)
+    starts_mon = add_key in what_if.starter_keys()
+    starts_fri = add_key in what_if_fri.starter_keys()
+    starts_monday_only = starts_mon and not starts_fri
+    starts_friday_only = starts_fri and not starts_mon
 
-    msg = "What-if complete."
+    bench_only = (
+        not starts_mon
+        and not starts_fri
+        and abs(net_weekly) < 1e-12
+        and baseline.starter_keys() == what_if.starter_keys()
+        and baseline_fri.starter_keys() == what_if_fri.starter_keys()
+    )
+
+    msg = "What-if complete (Mon–Thu lock + Fri–Sun hitter swap)."
     if drop_suggested and suggest_msg:
         msg = f"What-if complete ({suggest_msg})."
     if bench_only:
-        msg += " Add lands on the bench — zero immediate starter impact."
+        msg += " Add lands on the bench both halves — zero immediate starter impact."
+    elif starts_monday_only:
+        msg += " Add starts Mon–Thu only; weekend lineup uses another bat."
+    elif starts_friday_only:
+        msg += " Add starts Fri–Sun only; Mon–Thu lineup uses another bat."
 
     drop_id = resolved_drop[0] if resolved_drop else None
     drop_rt = resolved_drop[1] if resolved_drop else None
@@ -340,11 +379,15 @@ def analyze_add_drop(
         drop_suggested=drop_suggested,
         baseline=baseline,
         what_if=what_if,
+        baseline_friday=baseline_fri,
+        what_if_friday=what_if_fri,
         net_weekly_value=net_weekly,
         category_deltas=cat_deltas,
         net_overall_pts_estimate=net_overall,
         any_within_noise=any_within,
         bench_only_add=bench_only,
+        starts_monday_only=starts_monday_only,
+        starts_friday_only=starts_friday_only,
     )
 
 

@@ -355,6 +355,28 @@ def test_position_constraint_blocks_a_higher_value_add():
     assert what_if.total_score == pytest.approx(baseline.total_score)
 
 
+def test_split_week_add_drop_values_monday_only_start():
+    from lineup_optimizer import aggregate_split_week_totals, simulate_add_drop_split_week
+
+    roster = [
+        hitter(1, ["OF"], 10.0, dollars_monday_thursday=5.0, dollars_friday_sunday=20.0,
+               r=4.0, mt_r=1.0, fs_r=3.0, hits=6.0, ab=20.0, mt_hits=2.0, mt_ab=8.0,
+               fs_hits=4.0, fs_ab=12.0),
+        hitter(2, ["OF"], 1.0, dollars_monday_thursday=1.0, dollars_friday_sunday=1.0),
+    ]
+    add = hitter(10, ["OF"], 15.0, dollars_monday_thursday=30.0, dollars_friday_sunday=2.0,
+                 r=5.0, mt_r=4.0, fs_r=1.0, hits=8.0, ab=20.0, mt_hits=6.0, mt_ab=12.0,
+                 fs_hits=2.0, fs_ab=8.0)
+
+    sim = simulate_add_drop_split_week(
+        roster, {"OF": 1}, add=add, drop_key=(2, "hitter")
+    )
+    assert sim["whatif_monday"].starter_ids() == {10}
+    assert sim["whatif_friday"].starter_ids() == {1}
+    assert sim["net_weekly_value"] == pytest.approx((30.0 - 5.0) + (20.0 - 20.0))
+    assert sim["whatif_totals"]["r"] == pytest.approx(4.0 + 3.0)  # add mt + p1 fs
+
+
 # ---------------------------------------------------------------------------
 # Utility Advantage + determinism
 # ---------------------------------------------------------------------------
