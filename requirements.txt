@@ -1,7 +1,7 @@
 streamlit==1.60.0
 boto3==1.43.56
 pandas==3.0.5
-pyathena==3.35.3
+pyathena==3.35.4
 python-dotenv==1.2.2
 plotly==6.9.0
 numpy==2.5.1
