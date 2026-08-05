@@ -28,6 +28,10 @@ from lineup_weights import (
     team_fit_inputs_ready,
     weights_from_plan_rows,
 )
+from two_start_pitchers import (
+    build_two_start_rows,
+    confidence_tooltip_markdown,
+)
 from weekly_category_plan import (
     CATEGORY_ORDER,
     DEFAULT_STRETCH,
@@ -1475,6 +1479,61 @@ with tab_lineup:
             hide_index=True,
         )
 
+    # ------------------------------------------------------------------
+    # Two-Start Pitchers (#59) — my roster + free agents
+    # ------------------------------------------------------------------
+    st.markdown("### Two-Start Pitchers")
+    st.caption(confidence_tooltip_markdown())
+
+    faab_for_two_start = pd.DataFrame()
+    try:
+        faab_for_two_start = load_faab_data(league_key)
+    except Exception:
+        faab_for_two_start = pd.DataFrame()
+
+    two_start_df = build_two_start_rows(
+        lineup_df,
+        selected_owner=selected_owner,
+        faab_df=faab_for_two_start,
+    )
+    if two_start_df.empty:
+        st.info(
+            "No two-start pitchers on your roster or the free-agent pool for "
+            "this week (or `is_two_start` is not populated yet)."
+        )
+    else:
+        two_start_view = pd.DataFrame(
+            {
+                "Status": two_start_df["status"],
+                "Player": two_start_df["player_name"],
+                "Team": two_start_df["team"],
+                "Pos": two_start_df["pos_raw"],
+                "Wk $": two_start_df["weekly_projection_value"],
+                "1st": two_start_df["first_start_day"],
+                "Confidence": two_start_df["confidence"],
+                "Opp": two_start_df["opps"],
+                "Own %": two_start_df["own_pct"],
+                "RoS $": two_start_df["ros_value"],
+                "FTN": two_start_df["ftn_type"],
+                "FTN low": two_start_df["low_bid"],
+                "FTN high": two_start_df["high_bid"],
+            }
+        )
+        st.dataframe(two_start_view, use_container_width=True, hide_index=True)
+        with st.expander("Two-start confidence notes"):
+            st.markdown(
+                "- Sorted by weekly projection `$` within **My roster**, then "
+                "**Free agent**.\n"
+                "- Confidence bands key on **first-start day**, not on the "
+                "accuracy percentage (bands are mutually exclusive).\n"
+                "- Free-agent FTN bid columns come from "
+                "`mart_faab_worksheet` when a match exists.\n"
+                "- Other managers' rostered two-starts are hidden here — use "
+                "FAAB / wire tools if you need the full pool.\n"
+                "- Accuracy figures are book-sourced until measured "
+                "contest values land in #206."
+            )
+
     with st.expander("How this works (v2)"):
         st.markdown(
             "- **Exact assignment**: hitters are matched to C/1B/2B/3B/SS/MI/"
@@ -1503,7 +1562,9 @@ with tab_lineup:
             "volume. Stand-alone leagues stay on Neutral.\n"
             "- **Related**: FAAB what-if is on the FAAB Worksheet tab (#187); "
             "Overall Standings packages rank/mobility and Weekly Plan "
-            "maintain/stretch targets (#189 / #186)."
+            "maintain/stretch targets (#189 / #186). Two-start confidence "
+            "bands (#59) cite *The Process* p. 217 until #206 measures "
+            "local accuracy."
         )
 
 
