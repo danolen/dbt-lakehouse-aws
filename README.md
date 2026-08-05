@@ -1,86 +1,74 @@
 # Fantasy Baseball Platform
 
-A personal data lakehouse and analytics platform for fantasy baseball draft preparation and in-season decision making. Built with dbt, Streamlit, and AWS.
+Personal lakehouse + apps for NFBC draft prep and in-season decisions. **dbt** on Athena/Iceberg, **Streamlit** apps, **Prefect** vendor ingest, AWS.
 
-**Roadmap and feature plans** are kept in Cursor’s plan files (typically `~/.cursor/plans/` on your machine). They are not committed in this repository, so there is a single source of truth.
-
----
-
-## Repository Structure
-
-| Directory | Description |
-|-----------|-------------|
-| [`dbt/`](dbt/) | dbt project -- Iceberg tables in Athena using a medallion architecture (source / stage / main). See [`dbt/README.md`](dbt/README.md) for local setup. |
-| [`apps/draft-tool/`](apps/draft-tool/) | Streamlit draft tool -- player rankings, projected stats, real-time draft tracking via DynamoDB |
-| [`apps/in-season-tool/`](apps/in-season-tool/) | Streamlit in-season tool -- FAAB worksheet, weekly lineup recommendations |
-| [`utils/`](utils/) | Utility scripts for data operations (e.g., S3 uploads) |
-
-Production **dbt Cloud Jobs** (scheduled orchestration) are **not set up yet**; add them when ready and document each job in [`dbt/README.md`](dbt/README.md#dbt-cloud-jobs). Until then, use local dbt (`dbt parse` / `dbt compile`, and optional `dbt build` with AWS credentials) for iteration; install with
-`pip install -r requirements-dev.txt` and see [`dbt/README.md`](dbt/README.md).
+Roadmap lives in [GitHub issues](https://github.com/danolen/fantasy-baseball-platform/issues) (epics #83–#99 and Phase 2 app tickets). Agent notes: [`AGENTS.md`](AGENTS.md).
 
 ---
 
-## Architecture
+## What’s live
 
-### Storage
-- **Amazon S3** with `year=YYYY/month=MM/day=DD/` partitioning
-
-### Data Architecture
-- Lakehouse on **Amazon Athena** with external tables over raw CSV/TSV files
-- All source fields are strings; type casting and normalization happen in dbt
-- Logical partitioning by ingestion date
-
-### Transformation (`dbt/`)
-- dbt creates **Iceberg** tables in Athena
-- Medallion-style layers:
-  - **Source** -- select from external tables, add partition fields, filter to current data
-  - **Stage** -- intermediate transformations not exposed to downstream consumers
-  - **Main** -- consumption-ready tables for BI tools and apps
-
-### Draft Tool (`apps/draft-tool/`)
-- **Streamlit** web app deployed to Streamlit Community Cloud
-- Player rankings and valuations across contest formats
-- Real-time filtering, sorting, and ADP charts
-- Draft tracking persisted in **Amazon DynamoDB**
-- Mobile- and desktop-friendly
-
-### Access Control
-- Dedicated IAM principals per actor (Streamlit apps, GitHub Actions OIDC, Prefect, maintainer admin)
-- Full matrix, secrets inventory, agent GitHub access, and rotation checklist: [`docs/security.md`](docs/security.md)
+| Area | Highlights |
+|------|------------|
+| **In-season tool** | FAAB worksheet + what-if add/drop (split Mon–Thu / Fri–Sun); lineup optimizer (exact slot assignment, Monday lock / Friday hitter swap, Neutral `$` or Team-fit overall-pts weights); **Overall Standings** (rank/points, category mobility, Weekly Plan maintain/stretch) |
+| **dbt marts** | FAAB worksheet; weekly lineup inputs; overall category mobility (+ field-edge / pts-per-unit); weekly category plan |
+| **Ingest** | Prefect flows for NFBC in-season players + overall standings, FanGraphs ROS, FTN FAAB, Razzball weekly / Mon–Thu / weekend ([`flows/`](flows/)) |
+| **Draft tool** | Rankings, ADP, DynamoDB draft tracking |
+| **Platform** | CI (`ruff` + `dbt parse`), OIDC-friendly IAM sketches, security matrix in [`docs/security.md`](docs/security.md) |
 
 ---
 
-## Goals & Motivation
+## Repository layout
 
-- Build hands-on experience with **lakehouse architecture**
-- Use **dbt** as the core transformation layer
-- Design for **incremental growth** in data volume and complexity
-- Create a **real, usable product**, not a toy dataset
-- Practice making pragmatic trade-offs around cost, tooling, and scope
-
-Although the current dataset is small, the architecture is designed to scale naturally as new data sources and products are added.
-
----
-
-## Planned Enhancements
-
-- **In-season tools** -- Streamlit app in `apps/in-season-tool/` for add/drop decisions, lineup optimization
-- **Orchestration** -- Airflow (or similar) for ingestion, dbt builds, and app refreshes
-- **dbt improvements** -- incremental materializations, tests, documentation, macros
+| Path | Role |
+|------|------|
+| [`dbt/`](dbt/) | Source → stage → main Iceberg models (Athena). See [`dbt/README.md`](dbt/README.md). |
+| [`apps/draft-tool/`](apps/draft-tool/) | Streamlit draft app |
+| [`apps/in-season-tool/`](apps/in-season-tool/) | Streamlit in-season app |
+| [`flows/`](flows/) | Prefect vendor ingestion ([`flows/README.md`](flows/README.md), ADR [`docs/adr/0001-prefect-on-aws.md`](docs/adr/0001-prefect-on-aws.md)) |
+| [`terraform/`](terraform/) | IAM / bootstrap modules (maintainer-applied) |
+| [`docs/`](docs/) | Security, ADRs |
+| [`utils/`](utils/) | Small operator helpers (e.g. S3 upload) |
 
 ---
 
-## Manual data maintenance
+## Architecture (short)
 
-A few seeds need periodic hand-updates while headless ingestion is still pending (Phase 2b):
+- **S3** lakehouse (`year=/month=/day=` partitions) → Athena external tables → dbt Iceberg (`dbt_source` / `dbt_stage` / `dbt_main`; seeds in profile schema `dbt`)
+- Apps query Athena with cached loaders; draft tracking uses DynamoDB
+- Secrets and IAM roles are per actor — see [`docs/security.md`](docs/security.md)
 
-| Seed | Update cadence | After updating |
-|------|----------------|----------------|
-| [`dbt/seeds/faab_remaining.csv`](dbt/seeds/faab_remaining.csv) | Weekly, after NFBC waivers run | `dbt seed --select faab_remaining` (locally with credentials, or via a dbt Cloud job once you add one); no full rebuild needed |
-| [`dbt/seeds/ftn_nfbc_player_overrides.csv`](dbt/seeds/ftn_nfbc_player_overrides.csv) | As-needed when the FAAB app surfaces unmatched FTN players | `dbt seed && dbt build` (same: local or Cloud) |
+---
+
+## Run locally
+
+```bash
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt          # apps
+pip install -r requirements-dev.txt      # + dbt-athena
+
+# Apps (need ATHENA_S3_OUTPUT + AWS creds for data; UI still boots without)
+streamlit run apps/draft-tool/app.py --server.port 8501
+streamlit run apps/in-season-tool/app.py --server.port 8502
+
+# dbt offline check
+cd dbt && dbt parse
+
+# Prefect dry-run (no AWS / Prefect API)
+python flows/razzball_weekly.py --dry-run
+```
+
+---
+
+## Manual seeds
+
+| Seed | When |
+|------|------|
+| [`dbt/seeds/faab_remaining.csv`](dbt/seeds/faab_remaining.csv) | Weekly after NFBC waivers → `dbt seed --select faab_remaining` |
+| [`dbt/seeds/ftn_nfbc_player_overrides.csv`](dbt/seeds/ftn_nfbc_player_overrides.csv) | When the FAAB unmatched badge needs a fix → `dbt seed` + rebuild FAAB models |
 
 ---
 
 ## Disclaimer
 
-This project is for personal use and learning. All data sources are accessed via legitimate paid subscriptions where required and are not redistributed.
+Personal use and learning. Paid data sources are not redistributed.
