@@ -1,8 +1,15 @@
-"""Two-start pitcher confidence bands and display rows (#59).
+"""Two-start pitcher schedule buckets (#59).
 
-Bands key on **first-start day** (deterministic from Razzball Opp day codes).
-Accuracy figures are book-sourced from *The Process* p. 217 until #206
-replaces them with measured contest values.
+Confidence is a plain-language label about how likely a projected two-start
+is to hold, based on first-start day and the MLB team's games this week —
+
+- Mon + full (7-game) week — most room for a Sunday second start
+- Mon + short week — off day in the week makes the second start less certain
+- Tue first — needs a full slate to come back Sunday
+- Later first start (Wed–Sun) — not the classic Mon/Sun two-start pattern
+
+Team game counts come from hitter ``num_g`` on the same MLB team in the
+weekly lineup inputs. Book percentages are intentionally not shown.
 """
 
 from __future__ import annotations
@@ -22,42 +29,15 @@ DAY_CODE_LABELS: dict[str, str] = {
     "SU": "Sun",
 }
 
-# Book-sourced two-start completion accuracy (*The Process* p. 217).
-# Mon / Tue / Sat–Sun are quoted; Wed–Thu share the Tue band; Fri is
-# weekend-adjacent and shares the Sat/Sun band. Bands are mutually exclusive
-# and jointly exhaustive over the seven day codes.
-_BOOK_SOURCE = "book (*The Process* p. 217)"
-
-# day_code -> (emoji, band_key, accuracy_display, band_label, accuracy_note)
-_BAND_BY_DAY: dict[str, tuple[str, str, str, str, str]] = {
-    "MO": ("🟢", "high", "87%", "Mon-first", _BOOK_SOURCE),
-    "TU": ("🟡", "medium", "68%", "Tue-first", _BOOK_SOURCE),
-    "WE": (
-        "🟡",
-        "medium",
-        "~68%",
-        "Wed-first (banded w/ Tue)",
-        f"{_BOOK_SOURCE}; Wed not isolated in study",
-    ),
-    "TH": (
-        "🟡",
-        "medium",
-        "~68%",
-        "Thu-first (banded w/ Tue)",
-        f"{_BOOK_SOURCE}; Thu not isolated in study",
-    ),
-    "FR": (
-        "🔴",
-        "low",
-        "≤70%",
-        "Fri-first (weekend-adjacent)",
-        f"{_BOOK_SOURCE}; Fri banded with Sat/Sun",
-    ),
-    "SA": ("🔴", "low", "≤70%", "Sat-first", _BOOK_SOURCE),
-    "SU": ("🔴", "low", "≤70%", "Sun-first", _BOOK_SOURCE),
+# Sort key: lower = more trustworthy for a classic two-start.
+_BUCKET_SORT: dict[str, int] = {
+    "mon_full": 0,
+    "mon_short": 1,
+    "mon_unknown": 2,
+    "tue": 3,
+    "later": 4,
+    "unknown": 5,
 }
-
-ACCURACY_SOURCE_KIND = "book"  # flip to "measured" when #206 lands
 
 
 def normalize_first_start_day(raw: Any) -> Optional[str]:
@@ -67,10 +47,8 @@ def normalize_first_start_day(raw: Any) -> Optional[str]:
     text = str(raw).strip().upper()
     if not text or text in ("NAN", "NONE", ""):
         return None
-    # Already a code.
     if text in DAY_CODE_LABELS:
         return text
-    # Full weekday name / abbreviation.
     aliases = {
         "MON": "MO",
         "MONDAY": "MO",
@@ -93,43 +71,84 @@ def normalize_first_start_day(raw: Any) -> Optional[str]:
     return aliases.get(text)
 
 
-def first_start_confidence(first_start_day: Any) -> dict[str, Any]:
-    """Map first-start day to a confidence band.
+def team_games_by_mlb_team(lineup_df: pd.DataFrame) -> dict[str, int]:
+    """Map MLB team code → weekly games from hitter ``num_g`` (mode / max)."""
+    if lineup_df is None or lineup_df.empty:
+        return {}
+    if "team" not in lineup_df.columns or "num_g" not in lineup_df.columns:
+        return {}
 
-    Returns keys: day_code, day_label, emoji, band, accuracy, band_label,
-    accuracy_source, accuracy_source_kind, confidence_display.
-    Unknown / missing days get an explicit ``unknown`` band (not dual-matched).
+    hitters = lineup_df
+    if "row_type" in lineup_df.columns:
+        hitters = lineup_df[
+            lineup_df["row_type"].fillna("hitter").astype(str).str.lower() == "hitter"
+        ]
+    if hitters.empty:
+        return {}
+
+    out: dict[str, int] = {}
+    for team, grp in hitters.groupby(hitters["team"].astype(str).str.strip()):
+        if not team or team.lower() in ("nan", "none", ""):
+            continue
+        nums = pd.to_numeric(grp["num_g"], errors="coerce").dropna()
+        if nums.empty:
+            continue
+        # Prefer the most common game count; fall back to max.
+        mode = nums.mode()
+        out[team] = int(mode.iloc[0]) if not mode.empty else int(nums.max())
+    return out
+
+
+def two_start_bucket(
+    first_start_day: Any,
+    team_games: Optional[int] = None,
+) -> dict[str, Any]:
+    """Classify a projected two-start into a schedule bucket.
+
+    Returns ``bucket``, ``label``, ``day_code``, ``day_label``, ``team_games``,
+    ``sort_key``.
     """
     code = normalize_first_start_day(first_start_day)
-    if code is None or code not in _BAND_BY_DAY:
-        return {
-            "day_code": code,
-            "day_label": DAY_CODE_LABELS.get(code or "", "—"),
-            "emoji": "⚪",
-            "band": "unknown",
-            "accuracy": "—",
-            "band_label": "unknown first-start day",
-            "accuracy_source": _BOOK_SOURCE,
-            "accuracy_source_kind": ACCURACY_SOURCE_KIND,
-            "confidence_display": "⚪ unknown",
-        }
-    emoji, band, accuracy, band_label, source = _BAND_BY_DAY[code]
+    day_label = DAY_CODE_LABELS.get(code or "", "—")
+
+    games: Optional[int] = None
+    if team_games is not None and team_games == team_games:
+        try:
+            games = int(team_games)
+        except (TypeError, ValueError):
+            games = None
+
+    if code == "MO":
+        if games is not None and games >= 7:
+            bucket = "mon_full"
+            label = "Mon · full week (7g)"
+        elif games is not None and games > 0:
+            label = f"Mon · short week ({games}g)"
+            bucket = "mon_short"
+        else:
+            bucket = "mon_unknown"
+            label = "Mon · week length unknown"
+    elif code == "TU":
+        bucket = "tue"
+        if games is not None and games > 0:
+            label = f"Tue first ({games}g week)"
+        else:
+            label = "Tue first"
+    elif code in DAY_CODE_LABELS:
+        bucket = "later"
+        label = f"{day_label} first"
+    else:
+        bucket = "unknown"
+        label = "Unknown first start"
+
     return {
+        "bucket": bucket,
+        "label": label,
         "day_code": code,
-        "day_label": DAY_CODE_LABELS[code],
-        "emoji": emoji,
-        "band": band,
-        "accuracy": accuracy,
-        "band_label": band_label,
-        "accuracy_source": source,
-        "accuracy_source_kind": ACCURACY_SOURCE_KIND,
-        "confidence_display": f"{emoji} {DAY_CODE_LABELS[code]} ({accuracy})",
+        "day_label": day_label,
+        "team_games": games,
+        "sort_key": _BUCKET_SORT.get(bucket, 99),
     }
-
-
-def bands_are_exhaustive() -> bool:
-    """True when every calendar day code has exactly one band mapping."""
-    return set(_BAND_BY_DAY) == set(DAY_CODE_LABELS)
 
 
 def _is_free_agent(owner: Any) -> bool:
@@ -146,9 +165,8 @@ def build_two_start_rows(
 ) -> pd.DataFrame:
     """Build display rows for my-roster + free-agent two-start pitchers.
 
-    Sorted by weekly projection dollars (``dollars`` / ``weekly_projection_value``)
-    descending. Free-agent rows optionally join ``mart_faab_worksheet`` for
-    FTN bid context.
+    Sorted by schedule-bucket trust, then weekly projection dollars.
+    Free-agent rows optionally join ``mart_faab_worksheet`` for FTN bids.
     """
     if lineup_df is None or lineup_df.empty:
         return pd.DataFrame()
@@ -173,10 +191,11 @@ def build_two_start_rows(
         return "Other roster"
 
     two_start["status"] = two_start["owner"].map(_status)
-    # Surface my roster + FA only (streaming / start-sit relevant).
     two_start = two_start[two_start["status"].isin(["My roster", "Free agent"])]
     if two_start.empty:
         return pd.DataFrame()
+
+    games_by_team = team_games_by_mlb_team(lineup_df)
 
     faab_by_id: dict[Any, Mapping[str, Any]] = {}
     if faab_df is not None and not faab_df.empty and "nfbc_id" in faab_df.columns:
@@ -193,10 +212,16 @@ def build_two_start_rows(
 
     records: list[dict[str, Any]] = []
     for _, row in two_start.iterrows():
-        conf = first_start_confidence(row.get("first_start_day"))
+        team = row.get("team")
+        team_key = str(team).strip() if team is not None else ""
+        team_games = games_by_team.get(team_key)
+        bucket = two_start_bucket(row.get("first_start_day"), team_games)
+
         dollars = row.get("dollars")
         try:
-            weekly_value = float(dollars) if dollars is not None and dollars == dollars else None
+            weekly_value = (
+                float(dollars) if dollars is not None and dollars == dollars else None
+            )
         except (TypeError, ValueError):
             weekly_value = None
 
@@ -210,9 +235,6 @@ def build_two_start_rows(
             except (TypeError, ValueError):
                 faab = {}
 
-        low_bid = faab.get("low_bid")
-        high_bid = faab.get("high_bid")
-        ftn_type = faab.get("ftn_type")
         own_pct = row.get("own_pct")
         if own_pct is None:
             own_pct = faab.get("own_pct")
@@ -221,60 +243,53 @@ def build_two_start_rows(
             {
                 "status": row["status"],
                 "player_name": row.get("player_name"),
-                "team": row.get("team"),
+                "team": team,
                 "pos_raw": row.get("pos_raw"),
                 "weekly_projection_value": weekly_value,
-                "first_start_day": conf["day_label"],
-                "confidence": conf["confidence_display"],
-                "confidence_band": conf["band"],
-                "accuracy": conf["accuracy"],
+                "first_start_day": bucket["day_label"],
+                "team_games": bucket["team_games"],
+                "bucket": bucket["bucket"],
+                "schedule_bucket": bucket["label"],
+                "bucket_sort": bucket["sort_key"],
                 "opps": row.get("opps") or row.get("pitcher_opp"),
                 "own_pct": own_pct,
                 "ros_value": row.get("ros_value"),
-                "ftn_type": ftn_type,
-                "low_bid": low_bid,
-                "high_bid": high_bid,
+                "ftn_type": faab.get("ftn_type"),
+                "low_bid": faab.get("low_bid"),
+                "high_bid": faab.get("high_bid"),
                 "nfbc_id": nid,
-                "accuracy_source_kind": conf["accuracy_source_kind"],
             }
         )
 
     out = pd.DataFrame.from_records(records)
     if out.empty:
         return out
-    # My roster first, then FA; within each, highest weekly $ first.
     status_order = {"My roster": 0, "Free agent": 1}
     out["_status_ord"] = out["status"].map(status_order).fillna(9)
     out = out.sort_values(
-        ["_status_ord", "weekly_projection_value"],
-        ascending=[True, False],
+        ["_status_ord", "bucket_sort", "weekly_projection_value"],
+        ascending=[True, True, False],
         na_position="last",
     ).drop(columns=["_status_ord"])
     return out.reset_index(drop=True)
 
 
-def confidence_tooltip_markdown() -> str:
-    """Streamlit caption / expander text for confidence bands."""
-    kind = (
-        "book-sourced (*The Process* p. 217), not measured on this contest"
-        if ACCURACY_SOURCE_KIND == "book"
-        else "measured from this contest's snapshots (#206)"
-    )
+def schedule_bucket_caption() -> str:
+    """Short caption for the Two-Start Pitchers section."""
     return (
-        "**Confidence** keys on first-start day (Razzball Opp day code). "
-        f"Accuracy figures are **{kind}**. "
-        "🟢 Mon (87%) · 🟡 Tue–Thu (68% book Tue; Wed/Thu banded with Tue) · "
-        "🔴 Fri–Sun (≤70% book weekend; Fri banded with Sat/Sun). "
-        "Bands are mutually exclusive."
+        "**Schedule bucket** = how the first start lines up with the team's "
+        "games count this week. Mon + full week is the cleanest path to a "
+        "Sunday second start; Tue first usually needs all seven days; a Mon "
+        "start on a 6-game week is shakier. Later first starts (Wed–Sun) are "
+        "labeled separately. Team games come from weekly hitter `num_g`."
     )
 
 
 __all__ = [
-    "ACCURACY_SOURCE_KIND",
     "DAY_CODE_LABELS",
-    "bands_are_exhaustive",
     "build_two_start_rows",
-    "confidence_tooltip_markdown",
-    "first_start_confidence",
     "normalize_first_start_day",
+    "schedule_bucket_caption",
+    "team_games_by_mlb_team",
+    "two_start_bucket",
 ]

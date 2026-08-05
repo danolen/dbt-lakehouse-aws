@@ -30,7 +30,7 @@ from lineup_weights import (
 )
 from two_start_pitchers import (
     build_two_start_rows,
-    confidence_tooltip_markdown,
+    schedule_bucket_caption,
 )
 from weekly_category_plan import (
     CATEGORY_ORDER,
@@ -1483,7 +1483,7 @@ with tab_lineup:
     # Two-Start Pitchers (#59) — my roster + free agents
     # ------------------------------------------------------------------
     st.markdown("### Two-Start Pitchers")
-    st.caption(confidence_tooltip_markdown())
+    st.caption(schedule_bucket_caption())
 
     faab_for_two_start = pd.DataFrame()
     try:
@@ -1510,7 +1510,8 @@ with tab_lineup:
                 "Pos": two_start_df["pos_raw"],
                 "Wk $": two_start_df["weekly_projection_value"],
                 "1st": two_start_df["first_start_day"],
-                "Confidence": two_start_df["confidence"],
+                "Team G": two_start_df["team_games"],
+                "Schedule": two_start_df["schedule_bucket"],
                 "Opp": two_start_df["opps"],
                 "Own %": two_start_df["own_pct"],
                 "RoS $": two_start_df["ros_value"],
@@ -1520,18 +1521,20 @@ with tab_lineup:
             }
         )
         st.dataframe(two_start_view, use_container_width=True, hide_index=True)
-        with st.expander("Two-start confidence notes"):
+        with st.expander("Two-start schedule notes"):
             st.markdown(
-                "- Sorted by weekly projection `$` within **My roster**, then "
-                "**Free agent**.\n"
-                "- Confidence bands key on **first-start day**, not on the "
-                "accuracy percentage (bands are mutually exclusive).\n"
+                "- Sorted by schedule trust (Mon + full week first), then "
+                "weekly `$`, within **My roster** then **Free agent**.\n"
+                "- **Mon · full week**: team plays 7; best path to a Sunday "
+                "second start.\n"
+                "- **Mon · short week**: off day in the week — second start "
+                "is less certain.\n"
+                "- **Tue first**: usually needs all seven days to come back "
+                "Sunday.\n"
+                "- **Wed–Sun first**: labeled as later first starts.\n"
                 "- Free-agent FTN bid columns come from "
-                "`mart_faab_worksheet` when a match exists.\n"
-                "- Other managers' rostered two-starts are hidden here — use "
-                "FAAB / wire tools if you need the full pool.\n"
-                "- Accuracy figures are book-sourced until measured "
-                "contest values land in #206."
+                "`mart_faab_worksheet` when matched.\n"
+                "- Other managers' rostered two-starts are hidden here."
             )
 
     with st.expander("How this works (v2)"):
@@ -1562,9 +1565,8 @@ with tab_lineup:
             "volume. Stand-alone leagues stay on Neutral.\n"
             "- **Related**: FAAB what-if is on the FAAB Worksheet tab (#187); "
             "Overall Standings packages rank/mobility and Weekly Plan "
-            "maintain/stretch targets (#189 / #186). Two-start confidence "
-            "bands (#59) cite *The Process* p. 217 until #206 measures "
-            "local accuracy."
+            "maintain/stretch targets (#189 / #186). Two-start schedule "
+            "buckets (#59) use first-start day + team games this week."
         )
 
 
