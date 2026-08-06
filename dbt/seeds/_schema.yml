@@ -1,0 +1,24 @@
+version: 2
+
+seeds:
+  - name: projection_divergence_thresholds
+    description: >-
+      Configurable elevated/extreme divergence ratios and minimum season
+      sample sizes for mart_projection_rate_divergence (#206). Edit here —
+      do not hardcode thresholds in the Streamlit app.
+    columns:
+      - name: stat
+        data_tests:
+          - not_null
+      - name: projection_slice
+        data_tests:
+          - not_null
+      - name: elevated_ratio
+        data_tests:
+          - not_null
+      - name: extreme_ratio
+        data_tests:
+          - not_null
+      - name: min_sample_volume
+        data_tests:
+          - not_null

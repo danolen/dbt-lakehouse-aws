@@ -1,0 +1,14 @@
+stat,projection_slice,elevated_ratio,extreme_ratio,min_sample_volume,volume_metric,notes
+SB,weekend,1.5,2.0,100,ab,Garcia-style SB/AB weekend check (#206)
+SB,weekly,1.5,2.0,100,ab,Full-week SB/AB
+SB,monday_thursday,1.5,2.0,100,ab,Mon-Thu SB/AB
+HR,weekend,1.5,2.0,100,ab,
+HR,weekly,1.5,2.0,100,ab,
+HR,monday_thursday,1.5,2.0,100,ab,
+R,weekend,1.5,2.0,100,ab,
+R,weekly,1.5,2.0,100,ab,
+R,monday_thursday,1.5,2.0,100,ab,
+RBI,weekend,1.5,2.0,100,ab,
+RBI,weekly,1.5,2.0,100,ab,
+RBI,monday_thursday,1.5,2.0,100,ab,
+START,weekly,1.0,1.0,0,gs,"Pitcher start occurrence; ratios unused — flag is occurred/missed"
