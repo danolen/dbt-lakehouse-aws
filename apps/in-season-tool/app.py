@@ -1151,14 +1151,30 @@ with tab_lineup:
             "$; Friday uses Fri–Sun hitter $; pitchers use full-week $."
         )
 
-    # Monday lock scores/displays Mon–Thu hitter components when present (#210).
+    # Half-week display: Mon–Thu ``mt_*`` / Fri–Sun ``fs_*`` when present.
     use_mt = lineup_mode == "monday"
+    use_fs = lineup_mode == "friday"
     if lineup_mode == "monday":
         dollar_field, dollar_label = "dollars_monday_thursday", "M-Th $"
     elif lineup_mode == "friday":
         dollar_field, dollar_label = "dollars_friday_sunday", "F-Su $"
     else:
         dollar_field, dollar_label = "dollars", "Wk $"
+
+    _HITTER_HALF_FIELDS = {
+        "r": ("mt_r", "fs_r"),
+        "hr": ("mt_hr", "fs_hr"),
+        "rbi": ("mt_rbi", "fs_rbi"),
+        "sb": ("mt_sb", "fs_sb"),
+        "hits": ("mt_hits", "fs_hits"),
+        "ab": ("mt_ab", "fs_ab"),
+        "num_g": ("mt_num_g", "fs_num_g"),
+        "home_games": ("mt_home_games", "fs_home_games"),
+        "away_games": ("mt_away_games", "fs_away_games"),
+        "vs_rhp": ("mt_vs_rhp", "fs_vs_rhp"),
+        "vs_lhp": ("mt_vs_lhp", "fs_vs_lhp"),
+        "batting_avg": ("mt_batting_avg", "fs_batting_avg"),
+    }
 
     def _num(value):
         try:
@@ -1169,26 +1185,14 @@ with tab_lineup:
             return None
 
     def _hitter_stat(player, key):
-        """Prefer Mon–Thu ``mt_*`` fields on Monday; else full-week components."""
-        if use_mt:
-            mt_key = {
-                "r": "mt_r",
-                "hr": "mt_hr",
-                "rbi": "mt_rbi",
-                "sb": "mt_sb",
-                "hits": "mt_hits",
-                "ab": "mt_ab",
-                "num_g": "mt_num_g",
-                "home_games": "mt_home_games",
-                "away_games": "mt_away_games",
-                "vs_rhp": "mt_vs_rhp",
-                "vs_lhp": "mt_vs_lhp",
-                "batting_avg": "mt_batting_avg",
-            }.get(key)
-            if mt_key is not None:
-                mt_val = _num(player.get(mt_key))
-                if mt_val is not None:
-                    return mt_val
+        """Prefer ``mt_*`` / ``fs_*`` on Monday / Friday; else full-week."""
+        half = _HITTER_HALF_FIELDS.get(key)
+        if half is not None:
+            period_key = half[0] if use_mt else (half[1] if use_fs else None)
+            if period_key is not None:
+                period_val = _num(player.get(period_key))
+                if period_val is not None:
+                    return period_val
         return _num(player.get(key))
 
     def _fmt(value, spec):
@@ -1222,7 +1226,11 @@ with tab_lineup:
     window_note = (
         "Mon–Thu hitter projections"
         if use_mt
-        else ("Fri–Sun hitter $" if lineup_mode == "friday" else "full-week projections")
+        else (
+            "Fri–Sun hitter projections"
+            if use_fs
+            else "full-week projections"
+        )
     )
     st.markdown("### Expected lineup totals")
     st.caption(
@@ -1552,8 +1560,9 @@ with tab_lineup:
             "carries the Monday pitcher set through unchanged.\n"
             "- **Expected totals**: hitting and pitching projections from the "
             "active starters only, shown as separate tables. Monday uses "
-            "Mon–Thu hitter components when available; pitchers always use "
-            "full-week projections. Ratios use summed numerators/denominators "
+            "Mon–Thu hitter components when available; Friday uses Fri–Sun "
+            "hitter components; pitchers always use full-week projections. "
+            "Ratios use summed numerators/denominators "
             "(H/AB, ER/IP, (H+BB)/IP).\n"
             "- **Utility Advantage**: when two hitters are equally valuable, "
             "the less flexible one takes the exact slot so the multi-position "
