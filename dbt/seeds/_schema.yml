@@ -6,6 +6,14 @@ seeds:
       Configurable elevated/extreme divergence ratios and minimum season
       sample sizes for mart_projection_rate_divergence (#206). Edit here —
       do not hardcode thresholds in the Streamlit app.
+    config:
+      # Athena seed load: agate infers INT when every cell looks whole
+      # (e.g. extreme_ratio ``2.0`` / ``1.0``), then fails casting CSV
+      # ``'2.0'`` → INT. Force doubles for ratio columns.
+      column_types:
+        elevated_ratio: double
+        extreme_ratio: double
+        min_sample_volume: double
     columns:
       - name: stat
         data_tests:
