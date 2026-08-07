@@ -32,6 +32,8 @@ seeds:
       +tags: [inseason]
     ftn_nfbc_player_overrides:
       +tags: [inseason]
+    projection_divergence_thresholds:
+      +tags: [inseason]
 
 
 # Configuring models
