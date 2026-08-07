@@ -426,3 +426,52 @@ models:
               - league
               - team_key
               - category
+
+  - name: mart_projection_rate_divergence
+    description: >-
+      Observability flags when a Razzball weekly/weekend/Mon–Thu projection
+      rate diverges from season-to-date realized rates (#206). Grain is
+      (projection_slice, projection_as_of, nfbc_id, stat). Thresholds come
+      from seed projection_divergence_thresholds. This mart must never feed
+      optimize_week, FAAB what-if scoring, or any projection value.
+    columns:
+      - name: projection_slice
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['weekend', 'weekly', 'monday_thursday']
+      - name: nfbc_id
+        data_tests:
+          - not_null
+      - name: stat
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['SB', 'HR', 'R', 'RBI', 'START']
+      - name: divergence_flag
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - in_line
+                  - elevated
+                  - extreme
+                  - depressed
+                  - insufficient_sample
+                  - unknown
+                  - start_occurred
+                  - start_missed
+      - name: projection_as_of
+        data_tests:
+          - not_null
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - projection_slice
+              - projection_as_of
+              - nfbc_id
+              - stat

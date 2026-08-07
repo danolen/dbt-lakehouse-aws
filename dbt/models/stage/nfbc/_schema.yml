@@ -199,3 +199,22 @@ models:
               - snapshot_date
               - team_key
               - category
+
+  - name: stg_nfbc_in_season_players_snapshots
+    description: >-
+      Typed cumulative NFBC in-season player stats by snapshot_date (#206).
+      Deduped across league CSV files for the same day. Used only for
+      realized-rate / start-occurrence observability — not as a projection.
+    columns:
+      - name: nfbc_id
+        data_tests:
+          - not_null
+      - name: snapshot_date
+        data_tests:
+          - not_null
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - nfbc_id
+              - snapshot_date

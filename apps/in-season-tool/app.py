@@ -28,6 +28,7 @@ from lineup_weights import (
     team_fit_inputs_ready,
     weights_from_plan_rows,
 )
+from projection_divergence import flag_caption, summarize_player_flags
 from two_start_pitchers import (
     build_two_start_rows,
     schedule_bucket_caption,
@@ -216,6 +217,17 @@ def _fmt_signed(val, digits=1):
         return "—"
     sign = "+" if num > 0 else ""
     return f"{sign}{num:.{digits}f}"
+
+
+@st.cache_data(ttl=900)
+def load_projection_divergence():
+    """Observability flags only (#206) — never feed optimize_week."""
+    query = f"""
+        SELECT *
+        FROM {ATHENA_SCHEMA}.mart_projection_rate_divergence
+        WHERE is_latest_projection = true
+    """
+    return _optimize_df(_connect().cursor().execute(query).as_pandas())
 
 
 try:
@@ -1303,6 +1315,7 @@ with tab_lineup:
         "vs_rhp",
         "vs_lhp",
         "ros_value",
+        "rate_flag",
     ]
     HITTER_LABELS = {
         "slot": "Slot",
@@ -1324,7 +1337,20 @@ with tab_lineup:
         "vs_rhp": "vR",
         "vs_lhp": "vL",
         "ros_value": "RoS $",
+        "rate_flag": "Rate flags",
     }
+
+    divergence_df = pd.DataFrame()
+    try:
+        divergence_df = load_projection_divergence()
+    except Exception:
+        divergence_df = pd.DataFrame()
+    flag_by_id = summarize_player_flags(
+        divergence_df,
+        projection_slices=["weekly", "weekend", "monday_thursday"],
+    )
+    if flag_by_id:
+        st.caption(flag_caption())
 
     def _hitter_row(player, *, slot=None):
         row = {}
@@ -1349,13 +1375,20 @@ with tab_lineup:
         row["vs_rhp"] = _hitter_stat(player, "vs_rhp")
         row["vs_lhp"] = _hitter_stat(player, "vs_lhp")
         row["ros_value"] = _num(player.get("ros_value"))
+        nid = player.get("nfbc_id")
+        row["rate_flag"] = flag_by_id.get(nid, "")
+        if not row["rate_flag"]:
+            try:
+                row["rate_flag"] = flag_by_id.get(int(nid), "")
+            except (TypeError, ValueError):
+                pass
         return row
 
     def _hitter_frame(records, *, include_slot=False):
         cols = HITTER_COLS if include_slot else [c for c in HITTER_COLS if c != "slot"]
         df_h = pd.DataFrame(records, columns=cols)
         for col in cols:
-            if col in ("slot", "player_name", "team", "pos_raw", "bats"):
+            if col in ("slot", "player_name", "team", "pos_raw", "bats", "rate_flag"):
                 continue
             decimals = 3 if col == "batting_avg" else (1 if col in ("dollars", "ros_value", "sb", "r", "hr", "rbi", "hits", "ab") else 1)
             df_h[col] = pd.to_numeric(df_h[col], errors="coerce").round(decimals)
@@ -1422,6 +1455,7 @@ with tab_lineup:
         "era",
         "whip",
         "ros_value",
+        "rate_flag",
     ]
     PITCHER_LABELS = {
         "player_name": "Player",
@@ -1443,15 +1477,33 @@ with tab_lineup:
         "era": "ERA",
         "whip": "WHIP",
         "ros_value": "RoS $",
+        "rate_flag": "Rate flags",
     }
 
     def _pitcher_frame(records):
-        df_p = pd.DataFrame(
-            [{k: p.get(k) for k in PITCHER_COLS} for p in records],
-            columns=PITCHER_COLS,
-        )
+        enriched = []
+        for p in records:
+            row = {k: p.get(k) for k in PITCHER_COLS if k != "rate_flag"}
+            nid = p.get("nfbc_id")
+            flag = flag_by_id.get(nid, "")
+            if not flag:
+                try:
+                    flag = flag_by_id.get(int(nid), "")
+                except (TypeError, ValueError):
+                    flag = ""
+            row["rate_flag"] = flag
+            enriched.append(row)
+        df_p = pd.DataFrame(enriched, columns=PITCHER_COLS)
         for col in PITCHER_COLS:
-            if col in ("player_name", "team", "pos_raw", "first_start_day", "opps", "is_two_start"):
+            if col in (
+                "player_name",
+                "team",
+                "pos_raw",
+                "first_start_day",
+                "opps",
+                "is_two_start",
+                "rate_flag",
+            ):
                 continue
             df_p[col] = pd.to_numeric(df_p[col], errors="coerce").round(2)
         return df_p.sort_values("dollars", ascending=False, na_position="last")
@@ -1566,7 +1618,9 @@ with tab_lineup:
             "- **Related**: FAAB what-if is on the FAAB Worksheet tab (#187); "
             "Overall Standings packages rank/mobility and Weekly Plan "
             "maintain/stretch targets (#189 / #186). Two-start schedule "
-            "buckets (#59) use first-start day + team games this week."
+            "buckets (#59) use first-start day + team games this week. "
+            "Rate flags (#206) are observability only and never change "
+            "projections or the optimizer."
         )
 
 
