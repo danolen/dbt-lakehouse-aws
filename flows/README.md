@@ -95,8 +95,8 @@ access token automatically when the JWT is near expiry; if refresh fails (FTN
 sometimes returns HTTP 500 for a stale refresh token) it continues with the
 stored cookies — refresh failure alone is not fatal until a download fails.
 
-**Schedule (Prefect deployment):** Saturdays and Sundays at 8:00 AM
-`America/New_York`. S3 date partitions use `America/New_York`.
+**Schedule (Prefect deployment):** Saturdays and Sundays at 8:00 AM and
+8:00 PM `America/New_York`. S3 date partitions use `America/New_York`.
 
 ## Razzball weekly flow (#47, #210)
 
