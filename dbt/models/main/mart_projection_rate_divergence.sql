@@ -177,7 +177,8 @@ proj_keys as (
     from projected
 ),
 
-season_as_of as (
+-- Athena (this project's engine) does not accept QUALIFY; use row_number + filter.
+season_as_of_ranked as (
     select
         pk.nfbc_id as join_nfbc_id,
         pk.projection_as_of,
@@ -188,32 +189,58 @@ season_as_of as (
         s.runs,
         s.rbi,
         s.ip_outs,
-        s.snapshot_date
+        s.snapshot_date,
+        row_number() over (
+            partition by pk.nfbc_id, pk.projection_as_of
+            order by s.snapshot_date desc nulls last
+        ) as rn
     from proj_keys pk
     left join season s
         on s.nfbc_id = pk.nfbc_id
         and s.snapshot_date <= pk.projection_as_of
-    qualify row_number() over (
-        partition by pk.nfbc_id, pk.projection_as_of
-        order by s.snapshot_date desc nulls last
-    ) = 1
 ),
 
-season_week_later as (
+season_as_of as (
+    select
+        join_nfbc_id,
+        projection_as_of,
+        players,
+        ab,
+        stolen_bases,
+        home_runs,
+        runs,
+        rbi,
+        ip_outs,
+        snapshot_date
+    from season_as_of_ranked
+    where rn = 1
+),
+
+season_week_later_ranked as (
     select
         pk.nfbc_id,
         pk.projection_as_of,
         s.ip_outs as ip_outs_later,
-        s.snapshot_date as later_snapshot_date
+        s.snapshot_date as later_snapshot_date,
+        row_number() over (
+            partition by pk.nfbc_id, pk.projection_as_of
+            order by s.snapshot_date desc nulls last
+        ) as rn
     from (select distinct nfbc_id, projection_as_of from pitch_start) pk
     left join season s
         on s.nfbc_id = pk.nfbc_id
         and s.snapshot_date <= date_add('day', 7, pk.projection_as_of)
         and s.snapshot_date >= pk.projection_as_of
-    qualify row_number() over (
-        partition by pk.nfbc_id, pk.projection_as_of
-        order by s.snapshot_date desc nulls last
-    ) = 1
+),
+
+season_week_later as (
+    select
+        nfbc_id,
+        projection_as_of,
+        ip_outs_later,
+        later_snapshot_date
+    from season_week_later_ranked
+    where rn = 1
 ),
 
 joined as (
