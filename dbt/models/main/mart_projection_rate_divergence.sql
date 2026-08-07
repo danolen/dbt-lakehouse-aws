@@ -42,7 +42,9 @@ weekend_base as (
         cast(nullif(trim(r), '') as double) as proj_r,
         cast(nullif(trim(rbi), '') as double) as proj_rbi
     from {{ ref('src_razzball_projections_weekend_hitting_history') }}
+    -- Razzball uses nfbcid ``0`` for unmatched names; many players share it.
     where nullif(trim(nfbcid), '') is not null
+      and trim(nfbcid) <> '0'
 ),
 
 weekly_base as (
@@ -64,6 +66,7 @@ weekly_base as (
         cast(nullif(trim(rbi), '') as double) as proj_rbi
     from {{ ref('src_razzball_projections_weekly_hitting_history') }}
     where nullif(trim(nfbcid), '') is not null
+      and trim(nfbcid) <> '0'
 ),
 
 mt_base as (
@@ -85,6 +88,7 @@ mt_base as (
         cast(nullif(trim(rbi), '') as double) as proj_rbi
     from {{ ref('src_razzball_projections_monday_thursday_hitting_history') }}
     where nullif(trim(nfbcid), '') is not null
+      and trim(nfbcid) <> '0'
 ),
 
 hitter_long as (
@@ -163,6 +167,7 @@ pitch_start as (
         nullif(trim(opp), '') as pitcher_opp
     from {{ ref('src_razzball_projections_weekly_pitching_history') }}
     where nullif(trim(nfbcid), '') is not null
+      and trim(nfbcid) <> '0'
       and coalesce(cast(nullif(trim(gs), '') as double), 0) >= 1
 ),
 

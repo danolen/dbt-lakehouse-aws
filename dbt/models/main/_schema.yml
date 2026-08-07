@@ -431,9 +431,12 @@ models:
     description: >-
       Observability flags when a Razzball weekly/weekend/Mon–Thu projection
       rate diverges from season-to-date realized rates (#206). Grain is
-      (projection_slice, projection_as_of, nfbc_id, stat). Thresholds come
-      from seed projection_divergence_thresholds. This mart must never feed
-      optimize_week, FAAB what-if scoring, or any projection value.
+      (projection_slice, projection_as_of, nfbc_id, stat). Rows with Razzball
+      placeholder nfbcid ``0`` (unmatched names; many players share one id)
+      are excluded so the grain holds and season joins stay meaningful.
+      Thresholds come from seed projection_divergence_thresholds. This mart
+      must never feed optimize_week, FAAB what-if scoring, or any projection
+      value.
     columns:
       - name: projection_slice
         data_tests:
