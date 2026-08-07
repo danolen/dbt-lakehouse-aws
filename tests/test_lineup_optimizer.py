@@ -217,6 +217,71 @@ def test_monday_weighted_prefers_mt_components():
     assert result.starter_ids() == {2}
 
 
+def test_friday_weighted_prefers_fs_components():
+    """Team-fit Friday must score Fri–Sun ``fs_*``, not full-week counting.
+
+    Real case: Lile better Fri–Sun in all cats / F-Su $, Nootbaar better
+    full-week — buggy full-week Team-fit wrongly preferred Nootbaar.
+    """
+    players = [
+        hitter(
+            1,
+            ["OF"],
+            6.4,
+            dollars_friday_sunday=-3.9,
+            r=2.7,
+            hr=0.6,
+            rbi=2.4,
+            sb=0.2,
+            hits=4.8,
+            ab=19.4,
+            fs_r=1.1,
+            fs_hr=0.19,
+            fs_rbi=0.9,
+            fs_sb=0.09,
+            fs_hits=1.9,
+            fs_ab=8.3,
+        ),
+        hitter(
+            2,
+            ["OF"],
+            -3.2,
+            dollars_friday_sunday=9.4,
+            r=1.6,
+            hr=0.4,
+            rbi=1.7,
+            sb=0.4,
+            hits=3.6,
+            ab=14.6,
+            fs_r=1.2,
+            fs_hr=0.32,
+            fs_rbi=1.3,
+            fs_sb=0.27,
+            fs_hits=2.6,
+            fs_ab=10.4,
+        ),
+    ]
+    weights = {"r": 23.75, "hr": 24.5, "rbi": 11.9, "sb": 33.25, "avg": 250.0}
+    ratio_context = {"hits": 1400.0, "at_bats": 5635.0}
+    # Neutral Friday already prefers player 2 on F-Su $.
+    assert optimize_week(players, {"OF": 1}, mode="friday").starter_ids() == {2}
+    # Team-fit Friday must agree once fs_* components are used.
+    result = optimize_week(
+        players,
+        {"OF": 1},
+        mode="friday",
+        weights=weights,
+        ratio_context=ratio_context,
+    )
+    assert result.starter_ids() == {2}
+    # Sanity: full-week weighted score would flip the choice.
+    assert score_player(
+        players[0], weights=weights, ratio_context=ratio_context, score_field="dollars"
+    ) > score_player(
+        players[1], weights=weights, ratio_context=ratio_context, score_field="dollars"
+    )
+
+
 def test_friday_injury_swaps_in_the_next_best_bat():
     healthy = [
         hitter(1, ["OF"], 30.0, dollars_friday_sunday=28.0),
