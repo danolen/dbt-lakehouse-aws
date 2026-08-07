@@ -30,7 +30,8 @@ Scoring: the neutral Monday objective is Razzball Mon–Thu dollar value
 overall-points scoring, where each raw unit is multiplied by
 ``overall_points_per_raw_unit`` from ``mart_overall_category_mobility`` (#205).
 On Monday with weights, hitter counting/AVG stats prefer ``mt_*`` Mon–Thu
-components when present (#210). Ratio categories (AVG/ERA/WHIP) are linearized
+components when present (#210). On Friday with weights, prefer ``fs_*``
+Fri–Sun components so Team-fit matches the Neutral weekend window. Ratio categories (AVG/ERA/WHIP) are linearized
 around the team's season-to-date numerators and denominators supplied in
 ``ratio_context``; a week of volume is small relative to a season, so the
 linearization is accurate near the current standing.
@@ -70,7 +71,7 @@ FLEX_SLOTS = frozenset({"UTIL", "MI", "CI"})
 HITTER_COUNTING = ("r", "hr", "rbi", "sb")
 PITCHER_COUNTING = ("k", "w", "sv")
 
-# Mon–Thu component aliases on mart_weekly_lineup_inputs (#210).
+# Mon–Thu / Fri–Sun component aliases on mart_weekly_lineup_inputs (#210 / #187).
 _MT_HITTER_FIELDS = {
     "r": "mt_r",
     "hr": "mt_hr",
@@ -78,6 +79,14 @@ _MT_HITTER_FIELDS = {
     "sb": "mt_sb",
     "ab": "mt_ab",
     "hits": "mt_hits",
+}
+_FS_HITTER_FIELDS = {
+    "r": "fs_r",
+    "hr": "fs_hr",
+    "rbi": "fs_rbi",
+    "sb": "fs_sb",
+    "ab": "fs_ab",
+    "hits": "fs_hits",
 }
 
 # Raw-unit sizes matching mart_overall_category_mobility.raw_unit_size (#205).
@@ -188,15 +197,25 @@ def _sort_key(player: Mapping[str, Any]) -> tuple:
 
 
 def _hitter_stat(
-    player: Mapping[str, Any], key: str, *, use_monday_thursday: bool
+    player: Mapping[str, Any],
+    key: str,
+    *,
+    use_monday_thursday: bool = False,
+    use_friday_sunday: bool = False,
 ) -> float:
-    """Prefer Mon–Thu ``mt_*`` components when scoring Monday lock."""
+    """Prefer ``mt_*`` / ``fs_*`` components for half-week scoring windows."""
     if use_monday_thursday:
         mt_key = _MT_HITTER_FIELDS.get(key)
         if mt_key is not None:
             mt_val = _opt_num(player.get(mt_key))
             if mt_val is not None:
                 return mt_val
+    if use_friday_sunday:
+        fs_key = _FS_HITTER_FIELDS.get(key)
+        if fs_key is not None:
+            fs_val = _opt_num(player.get(fs_key))
+            if fs_val is not None:
+                return fs_val
     return _num(player.get(key))
 
 
@@ -226,9 +245,11 @@ def score_player(
     counting stats, .001 for AVG, .01 for ERA, .005 for WHIP.
 
     When ``score_field`` is ``dollars_monday_thursday`` and weights are set,
-    hitter components prefer ``mt_*`` Mon–Thu columns (#210).
+    hitter components prefer ``mt_*`` Mon–Thu columns (#210). When it is
+    ``dollars_friday_sunday``, prefer ``fs_*`` Fri–Sun columns.
     """
     use_mt = score_field == "dollars_monday_thursday"
+    use_fs = score_field == "dollars_friday_sunday"
     if not weights:
         return _objective_dollars(player, score_field)
 
@@ -236,11 +257,18 @@ def score_player(
     total = 0.0
     if _row_type(player) == "hitter":
         for cat in HITTER_COUNTING:
-            total += _hitter_stat(player, cat, use_monday_thursday=use_mt) * _num(
-                weights.get(cat)
-            )
+            total += _hitter_stat(
+                player,
+                cat,
+                use_monday_thursday=use_mt,
+                use_friday_sunday=use_fs,
+            ) * _num(weights.get(cat))
         total += _avg_contribution(
-            player, weights, ctx, use_monday_thursday=use_mt
+            player,
+            weights,
+            ctx,
+            use_monday_thursday=use_mt,
+            use_friday_sunday=use_fs,
         )
     else:
         for cat in PITCHER_COUNTING:
@@ -256,6 +284,7 @@ def _avg_contribution(
     ctx: Mapping[str, float],
     *,
     use_monday_thursday: bool = False,
+    use_friday_sunday: bool = False,
 ) -> float:
     weight = _num(weights.get("avg"))
     if not weight:
@@ -264,8 +293,18 @@ def _avg_contribution(
     team_ab = _opt_num(ctx.get("at_bats"))
     if team_h is None or not team_ab:
         return 0.0
-    ab = _hitter_stat(player, "ab", use_monday_thursday=use_monday_thursday)
-    hits = _hitter_stat(player, "hits", use_monday_thursday=use_monday_thursday)
+    ab = _hitter_stat(
+        player,
+        "ab",
+        use_monday_thursday=use_monday_thursday,
+        use_friday_sunday=use_friday_sunday,
+    )
+    hits = _hitter_stat(
+        player,
+        "hits",
+        use_monday_thursday=use_monday_thursday,
+        use_friday_sunday=use_friday_sunday,
+    )
     if ab <= 0:
         return 0.0
     before = team_h / team_ab
@@ -627,16 +666,23 @@ def _missing_projection_ids(
 ) -> list[Any]:
     missing = []
     use_mt = score_field == "dollars_monday_thursday"
+    use_fs = score_field == "dollars_friday_sunday"
+    period_fields = (
+        _MT_HITTER_FIELDS if use_mt else (_FS_HITTER_FIELDS if use_fs else {})
+    )
     for p in players:
         if weights:
             if _row_type(p) == "hitter":
                 keys = (*HITTER_COUNTING, "ab")
                 if all(
                     _opt_num(
-                        p.get(_MT_HITTER_FIELDS[k] if use_mt and k in _MT_HITTER_FIELDS else k)
+                        p.get(period_fields[k] if k in period_fields else k)
                     )
                     is None
-                    and (not use_mt or _opt_num(p.get(k)) is None)
+                    and (
+                        (not use_mt and not use_fs)
+                        or _opt_num(p.get(k)) is None
+                    )
                     for k in keys
                 ):
                     missing.append(p.get("nfbc_id"))
