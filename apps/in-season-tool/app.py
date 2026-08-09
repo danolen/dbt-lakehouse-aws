@@ -1631,7 +1631,8 @@ with tab_lineup:
             "maintain/stretch targets (#189 / #186). Two-start schedule "
             "buckets (#59) use first-start day + team games this week. "
             "Rate flags (#206) are observability only and never change "
-            "projections or the optimizer."
+            "projections or the optimizer (hitter rate flags only in the UI; "
+            "pitcher start occurred/missed stays in the mart)."
         )
 
 

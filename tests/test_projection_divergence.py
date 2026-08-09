@@ -93,3 +93,41 @@ def test_summarize_player_flags_picks_notable():
     assert 10279 in summary
     assert "SB/weekend elevated" in summary[10279]
     assert 1 not in summary  # not latest
+
+
+def test_summarize_hides_start_missed_flags():
+    """START/start_missed stays in the mart but not in Lineup Optimizer UI."""
+    df = pd.DataFrame(
+        [
+            {
+                "nfbc_id": 999,
+                "stat": "START",
+                "projection_slice": "weekly",
+                "divergence_flag": "start_missed",
+                "divergence_ratio": None,
+                "is_latest_projection": True,
+            },
+            {
+                "nfbc_id": 999,
+                "stat": "SB",
+                "projection_slice": "weekly",
+                "divergence_flag": "elevated",
+                "divergence_ratio": 1.8,
+                "is_latest_projection": True,
+            },
+            {
+                "nfbc_id": 888,
+                "stat": "START",
+                "projection_slice": "weekly",
+                "divergence_flag": "start_missed",
+                "divergence_ratio": None,
+                "is_latest_projection": True,
+            },
+        ]
+    )
+    summary = summarize_player_flags(df, projection_slices=["weekly"])
+    assert 999 in summary
+    assert "SB/weekly elevated" in summary[999]
+    assert "START" not in summary[999]
+    assert "start_missed" not in summary[999]
+    assert 888 not in summary  # START-only player → no UI flags
