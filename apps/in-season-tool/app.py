@@ -515,7 +515,8 @@ with tab_faab:
     st.caption(
         "Value a free-agent add by the change to your optimized week: Monday "
         "lock (Mon–Thu hitter $ + week pitchers) then Friday hitter re-optimize "
-        "(Fri–Sun $) with pitchers locked. A bat started only Mon–Thu does not "
+        "(Fri–Sun $) with pitchers locked. Filter free agents by position, then "
+        "select one or more candidates. A bat started only Mon–Thu does not "
         "also get weekend volume — the Friday lineup’s stats are used instead. "
         "Uncertainty labels use the local noise floor from the weekly category "
         "plan when available."
@@ -672,12 +673,60 @@ with tab_faab:
                 name = p.get("player_name") or str(nid)
                 owned_labels[f"{nid}|{rt}"] = f"{name} ({rt})"
 
+            # Narrow the FA pool by position before picking candidates.
+            fa_pos_tokens = sorted(
+                {
+                    t
+                    for p in fa_players
+                    for t in (p.get("pos_array") or [])
+                    if t
+                }
+            )
+            fa_pos_filter = st.multiselect(
+                "Filter free agents by position",
+                options=fa_pos_tokens,
+                default=[],
+                key="faab_whatif_fa_pos",
+                help=(
+                    "Leave empty to list all free agents. Select one or more "
+                    "positions (e.g. SS, OF, SP) to narrow the Add candidate "
+                    "list — a player matches if any of their eligibilities "
+                    "is selected."
+                ),
+            )
+
+            def _fa_matches_pos_filter(player):
+                if not fa_pos_filter:
+                    return True
+                if player is None:
+                    return False
+                tokens = player.get("pos_array") or []
+                return any(t in fa_pos_filter for t in tokens)
+
+            filtered_add_options = [
+                k
+                for k in fa_labels
+                if _fa_matches_pos_filter(fa_by_id.get(k))
+            ]
+            filtered_add_options = sorted(
+                filtered_add_options, key=lambda k: fa_labels[k]
+            )
+            st.caption(
+                f"Showing **{len(filtered_add_options)}** of "
+                f"**{len(fa_labels)}** free agents"
+                + (
+                    f" (positions: {', '.join(fa_pos_filter)})"
+                    if fa_pos_filter
+                    else " (all positions)"
+                )
+                + "."
+            )
+
             c_add, c_drop, c_mode = st.columns([2, 2, 1])
             with c_add:
-                add_options = sorted(fa_labels.keys(), key=lambda k: fa_labels[k])
                 selected_adds = st.multiselect(
                     "Add candidate(s)",
-                    options=add_options,
+                    options=filtered_add_options,
                     format_func=lambda k: fa_labels.get(k, k),
                     key="faab_whatif_adds",
                 )
@@ -713,8 +762,22 @@ with tab_faab:
                     key="faab_whatif_rank_mode",
                 )
 
-            if not selected_adds:
-                st.info("Select at least one free-agent candidate.")
+            if not fa_labels:
+                st.info("No free agents in weekly lineup inputs for this league.")
+            elif fa_pos_filter and not filtered_add_options:
+                st.info(
+                    "No free agents match the selected position(s). "
+                    "Clear or widen the position filter."
+                )
+            elif not selected_adds:
+                st.info(
+                    "Select at least one free-agent candidate"
+                    + (
+                        " (from the filtered list)."
+                        if fa_pos_filter
+                        else "."
+                    )
+                )
             else:
                 drop_key = None
                 auto_suggest = drop_mode == "auto"
