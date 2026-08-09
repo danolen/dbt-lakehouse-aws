@@ -2,6 +2,11 @@
 
 Flags are observability metadata only — never feed ``optimize_week`` or
 FAAB what-if scoring.
+
+Lineup Optimizer Rate flags show hitter rate divergence only. Pitcher
+``START`` / ``start_missed`` rows stay in the mart for after-the-fact
+calibration but are hidden here — they are misleading when setting a
+lineup before the week’s games.
 """
 
 from __future__ import annotations
@@ -14,12 +19,14 @@ _FLAG_PRIORITY = {
     "extreme": 0,
     "elevated": 1,
     "depressed": 2,
-    "start_missed": 3,
-    "insufficient_sample": 4,
-    "unknown": 5,
-    "in_line": 6,
-    "start_occurred": 7,
+    "insufficient_sample": 3,
+    "unknown": 4,
+    "in_line": 5,
 }
+
+# Pitcher start-occurrence flags are kept in the mart; not shown in the UI.
+_UI_NOTABLE_FLAGS = frozenset({"elevated", "extreme", "depressed"})
+_UI_HIDDEN_STATS = frozenset({"START"})
 
 
 def classify_rate_divergence(
@@ -71,7 +78,10 @@ def summarize_player_flags(
     *,
     projection_slices: Optional[list[str]] = None,
 ) -> dict[Any, str]:
-    """Map nfbc_id → short display string of notable flags (latest rows)."""
+    """Map nfbc_id → short display string of notable hitter rate flags.
+
+    Excludes ``START`` / start_missed rows (mart still computes them).
+    """
     if divergence_df is None or divergence_df.empty:
         return {}
     df = divergence_df.copy()
@@ -79,10 +89,11 @@ def summarize_player_flags(
         df = df[df["is_latest_projection"].fillna(False).astype(bool)]
     if projection_slices and "projection_slice" in df.columns:
         df = df[df["projection_slice"].isin(projection_slices)]
+    if "stat" in df.columns:
+        df = df[~df["stat"].astype(str).str.upper().isin(_UI_HIDDEN_STATS)]
     if df.empty or "nfbc_id" not in df.columns:
         return {}
 
-    notable = {"elevated", "extreme", "depressed", "start_missed"}
     out: dict[Any, str] = {}
     for nfbc_id, grp in df.groupby("nfbc_id", dropna=False):
         parts: list[str] = []
@@ -96,7 +107,7 @@ def summarize_player_flags(
         )
         for r in rows:
             flag = str(r.get("divergence_flag") or "")
-            if flag not in notable:
+            if flag not in _UI_NOTABLE_FLAGS:
                 continue
             stat = r.get("stat") or "?"
             slice_ = r.get("projection_slice") or ""
@@ -119,8 +130,10 @@ def flag_caption() -> str:
         "**Rate flags** compare the vendor projection rate to season-to-date "
         "rate (same stat / AB). Thresholds are in seed "
         "`projection_divergence_thresholds` (default elevated ≥1.5×, extreme "
-        "≥2.0×, min 100 AB). Flags are informational only — they do not change "
-        "projections or the optimizer."
+        "≥2.0×, min 100 AB). Pitcher start occurred/missed flags are computed "
+        "in the mart but hidden here — they are after-the-fact and misleading "
+        "when setting a lineup before the week. Flags are informational only "
+        "— they do not change projections or the optimizer."
     )
 
 
