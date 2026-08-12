@@ -22,9 +22,16 @@
 # Pin ruff: CI installs from this file (not an unpinned `pip install ruff`).
 # Rule selection is pinned in ruff.toml to the pre-0.16 default set so minor
 # Ruff upgrades do not suddenly enable hundreds of new rules.
+#
+# Pin dbt-core-experimental-parser: dbt-core 1.12.0 allows <3,>=2.0.0a4.
+# 2.0.0a5+ publish a tiny sdist whose build backend downloads a ~50MB wheel
+# from GitHub Releases (not PyPI). That extra fetch flakes CI
+# ("Remote end closed connection without response") — seen on the #243
+# post-merge run. 2.0.0a4 is the last release with real PyPI wheels.
 
 dbt-core==1.12.0
 dbt-athena==1.10.0
+dbt-core-experimental-parser==2.0.0a4
 pyathena==3.35.4
 ruff==0.16.2
 pytest==9.1.1
