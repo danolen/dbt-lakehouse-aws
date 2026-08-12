@@ -46,7 +46,7 @@ This is a Fantasy Baseball Analytics Platform with three main components:
 | Component | Path | Purpose |
 |-----------|------|---------|
 | Draft Tool | `apps/draft-tool/` | Streamlit app — player rankings, ADP charts, draft tracking |
-| In-Season Tool | `apps/in-season-tool/` | Streamlit app — FAAB worksheet, lineup optimizer |
+| In-Season Tool | `apps/in-season-tool/` | Streamlit app — FAAB worksheet, lineup optimizer, overall standings, ROS rankings |
 | dbt Project | `dbt/` | Data transformations (Athena/Iceberg lakehouse) |
 
 ### Running services

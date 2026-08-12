@@ -33,6 +33,12 @@ from two_start_pitchers import (
     build_two_start_rows,
     schedule_bucket_caption,
 )
+from ros_rankings import (
+    apply_ros_filters,
+    format_for_league,
+    format_ros_display,
+    ros_table_name,
+)
 from weekly_category_plan import (
     CATEGORY_ORDER,
     DEFAULT_STRETCH,
@@ -154,6 +160,44 @@ def load_league_config():
 
 
 @st.cache_data(ttl=900)
+def load_ros_rankings(fmt):
+    """Rest-of-season overall rankings for one format mart (#67)."""
+    table = ros_table_name(fmt)
+    cols = ", ".join(
+        [
+            "rank",
+            "id",
+            "name",
+            "team",
+            "pos",
+            "adp",
+            "min_pick",
+            "max_pick",
+            "rank_diff",
+            "projected_opening_day_status",
+            "value",
+            "pa",
+            "ab",
+            "r",
+            "hr",
+            "rbi",
+            "sb",
+            "avg",
+            "obp",
+            "slg",
+            "ip",
+            "k",
+            "w",
+            "sv",
+            "era",
+            "whip",
+        ]
+    )
+    query = f"SELECT {cols} FROM {ATHENA_SCHEMA}.{table} ORDER BY rank"
+    return _optimize_df(_connect().cursor().execute(query).as_pandas())
+
+
+@st.cache_data(ttl=900)
 def load_weekly_category_plan(league):
     query = f"""
         SELECT * FROM {ATHENA_SCHEMA}.mart_weekly_category_plan
@@ -252,8 +296,8 @@ selected_league = st.sidebar.selectbox("Select League", list(LEAGUES.keys()))
 league_key = LEAGUES[selected_league]
 
 
-tab_faab, tab_lineup, tab_overall = st.tabs(
-    ["FAAB Worksheet", "Lineup Optimizer", "Overall Standings"]
+tab_faab, tab_lineup, tab_overall, tab_ros = st.tabs(
+    ["FAAB Worksheet", "Lineup Optimizer", "Overall Standings", "ROS Rankings"]
 )
 
 
@@ -2160,3 +2204,135 @@ with tab_overall:
             "- Stand-alone leagues never enter this mart — they keep FAAB + "
             "Lineup Optimizer only."
         )
+
+
+# ---------------------------------------------------------------------------
+# ROS Rankings tab (#67) — rest-of-season overall rankings by league format
+# ---------------------------------------------------------------------------
+
+with tab_ros:
+    st.subheader(f"ROS Rankings — {selected_league}")
+    st.caption(
+        "Rest-of-season dollar values from "
+        "`mart_rest_of_season_overall_rankings_{oc,me,50s}` for this league's "
+        "format. Filters match the draft tool (position, team, opening-day "
+        "status, name). Click a column header to sort. Draft tracking is "
+        "not included here."
+    )
+
+    try:
+        league_cfg_ros = load_league_config()
+    except Exception as e:
+        st.error(f"Failed to load league_config: {e}")
+        league_cfg_ros = pd.DataFrame()
+
+    ros_fmt = format_for_league(league_cfg_ros, league_key)
+    if ros_fmt is None:
+        st.info(
+            f"No ROS rankings mart for league `{league_key}` — "
+            "`league_config.format` must be `oc`, `me`, or `50s`."
+        )
+    else:
+        st.caption(
+            f"Format **{ros_fmt}** → `{ros_table_name(ros_fmt)}`."
+        )
+        try:
+            ros_df = load_ros_rankings(ros_fmt)
+        except Exception as e:
+            st.error(
+                f"Failed to load ROS rankings: {e}\n\n"
+                f"Confirm `{ros_table_name(ros_fmt)}` is built in "
+                f"`{ATHENA_SCHEMA}`."
+            )
+            ros_df = pd.DataFrame()
+
+        if ros_df.empty:
+            st.warning("No ROS ranking rows returned.")
+        else:
+            f1, f2, f3, f4 = st.columns(4)
+            pos_opts = sorted(
+                {
+                    p.strip()
+                    for raw in ros_df["pos"].dropna()
+                    for p in str(raw).replace("/", ",").split(",")
+                    if p.strip()
+                }
+            ) if "pos" in ros_df.columns else []
+            team_opts = (
+                sorted(ros_df["team"].dropna().unique().tolist())
+                if "team" in ros_df.columns
+                else []
+            )
+            status_opts = (
+                sorted(
+                    ros_df["projected_opening_day_status"]
+                    .dropna()
+                    .unique()
+                    .tolist()
+                )
+                if "projected_opening_day_status" in ros_df.columns
+                else []
+            )
+            with f1:
+                ros_positions = st.multiselect(
+                    "Position (can select multiple)",
+                    pos_opts,
+                    help="Players who have ANY of these positions.",
+                    key="ros_filter_pos",
+                )
+            with f2:
+                ros_teams = st.multiselect(
+                    "Team (can select multiple)",
+                    team_opts,
+                    help="Players from ANY of these teams.",
+                    key="ros_filter_team",
+                )
+            with f3:
+                ros_statuses = st.multiselect(
+                    "Opening Day Status (can select multiple)",
+                    status_opts,
+                    help="Projected opening-day status from the FanGraphs roster file.",
+                    key="ros_filter_status",
+                )
+            with f4:
+                ros_search = st.text_input(
+                    "Search Player Name",
+                    key="ros_filter_search",
+                )
+
+            filtered_ros = apply_ros_filters(
+                ros_df,
+                positions=ros_positions,
+                teams=ros_teams,
+                statuses=ros_statuses,
+                search_name=ros_search,
+            )
+            if len(filtered_ros) < len(ros_df):
+                st.caption(
+                    f"Showing {len(filtered_ros)} of {len(ros_df)} players."
+                )
+            else:
+                st.caption(f"Showing all {len(ros_df)} players.")
+
+            row_limit = st.number_input(
+                "Max Rows to Display",
+                min_value=100,
+                max_value=5000,
+                value=500,
+                step=100,
+                help="Limit displayed rows to reduce memory usage.",
+                key="ros_row_limit",
+            )
+            display_ros = format_ros_display(filtered_ros)
+            original_n = len(display_ros)
+            if original_n > row_limit:
+                display_ros = display_ros.head(int(row_limit))
+                st.info(
+                    f"Showing first {int(row_limit)} of {original_n} "
+                    "filtered players. Raise Max Rows to Display to see more."
+                )
+            st.dataframe(
+                display_ros,
+                use_container_width=True,
+                hide_index=True,
+            )

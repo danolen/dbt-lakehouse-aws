@@ -1,7 +1,8 @@
 # Fantasy Baseball In-Season Tool
 
-Streamlit app for FAAB worksheets and weekly lineup recommendations. Reads
-marts from Athena; does **not** write to DynamoDB.
+Streamlit app for FAAB worksheets, weekly lineup recommendations, overall
+standings, and rest-of-season rankings. Reads marts from Athena; does **not**
+write to DynamoDB.
 
 ## AWS credentials
 
