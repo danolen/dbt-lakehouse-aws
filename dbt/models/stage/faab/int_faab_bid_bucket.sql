@@ -5,6 +5,7 @@
 }}
 
 -- Classification harness for dbt unit tests (#61 / A6.3).
+-- Intermediate (stage schema) — not queried by Streamlit.
 -- Production mart_faab_worksheet applies faab_bid_bucket() the same way.
 -- This view is empty unless tests mock int_faab_bid_bucket_inputs.
 

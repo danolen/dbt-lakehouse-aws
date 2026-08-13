@@ -5,8 +5,9 @@
 }}
 
 -- Slim input grain for dbt unit tests of faab_bid_bucket (#61).
--- Empty in production; mart_faab_worksheet applies the same macro on live
--- worksheet rows. Unit tests mock this node (do not mock the wide FAAB join).
+-- Intermediate (ephemeral; stage folder). Empty in production;
+-- mart_faab_worksheet applies the same macro on live worksheet rows.
+-- Unit tests mock this node (do not mock the wide FAAB join).
 
 select
     cast(null as varchar) as case_id,

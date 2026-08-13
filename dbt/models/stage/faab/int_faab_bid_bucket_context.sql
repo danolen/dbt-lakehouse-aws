@@ -5,7 +5,7 @@
 }}
 
 -- Per-league roster-gap and FA-scarcity flags for bid_bucket (#61).
--- Grain: league.
+-- Grain: league. Intermediate (stage schema) — not queried by Streamlit.
 --
 -- "My" team is the mart_weekly_lineup_inputs owner matching
 -- owner_name_pattern (default ``%nolen%``). Cash leagues without a match
