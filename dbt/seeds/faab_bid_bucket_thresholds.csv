@@ -1,0 +1,2 @@
+cheap_high_bid_max,cheap_pct_of_faab_max,expensive_high_bid_min,expensive_pct_of_faab_min,borderline_high_bid_min,high_own_pct_min,scarce_fa_count_max,ros_value_keeper_min,owner_name_pattern,notes
+5.0,2.0,25.0,8.0,15.0,90.0,3.0,0.0,%nolen%,"#61 bid_bucket cutoffs. FTN $ is market heat not quality. Edit here — do not hardcode in Streamlit."

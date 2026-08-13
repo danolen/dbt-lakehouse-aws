@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from pyathena import connect
 from pyathena.pandas.cursor import PandasCursor
 
+from faab_bid_bucket import BUCKET_LABELS, format_bid_bucket
 from faab_what_if import (
     RANK_MODE_OVERALL,
     RANK_MODE_WEEKLY,
@@ -356,6 +357,15 @@ with tab_faab:
 
     search = st.sidebar.text_input("Search player")
 
+    selected_buckets = []
+    if league_has_faab and "bid_bucket" in df.columns:
+        selected_buckets = st.sidebar.multiselect(
+            "Bid bucket",
+            options=["triage", "tactical", "strategic"],
+            default=["triage", "tactical", "strategic"],
+            format_func=lambda b: BUCKET_LABELS.get(b, b),
+        )
+
     mask = pd.Series(True, index=df.index)
 
     if ftn_only:
@@ -379,6 +389,11 @@ with tab_faab:
 
     if search:
         mask &= df["player"].str.contains(search, case=False, na=False)
+
+    if selected_buckets:
+        mask &= df["bid_bucket"].isin(selected_buckets) | df["bid_bucket"].isna()
+    elif league_has_faab and "bid_bucket" in df.columns:
+        mask &= False
 
     display = df.loc[mask].copy()
 
@@ -407,8 +422,15 @@ with tab_faab:
         display["pct_of_budget_display"] = display["high_bid_pct_of_faab"].apply(
             _format_pct_of_faab
         )
+        if "bid_bucket" in display.columns:
+            display["bid_bucket_display"] = display["bid_bucket"].apply(
+                format_bid_bucket
+            )
+        else:
+            display["bid_bucket_display"] = ""
     else:
         display["pct_of_budget_display"] = ""
+        display["bid_bucket_display"] = ""
 
     # FTN status arrows live in `status_tag` (e.g. "⬆️", "⬇️"). Prefix the
     # player name when set so trending adds are scannable at a glance.
@@ -433,6 +455,7 @@ with tab_faab:
         "low_bid": "Low $",
         "high_bid": "High $",
         "pct_of_budget_display": "% of Budget",
+        "bid_bucket_display": "Bucket",
         "ros_value": "RoS $",
         "rfs12": "RFS12",
         "rfs15": "RFS15",
@@ -450,6 +473,7 @@ with tab_faab:
     # data is still useful for trade/drop decisions there.
     if not has_faab:
         COLUMNS.pop("pct_of_budget_display", None)
+        COLUMNS.pop("bid_bucket_display", None)
 
     sort_cols = [
         c for c in ["has_ftn_rec", "high_bid", "ros_value"] if c in display.columns
@@ -538,6 +562,15 @@ with tab_faab:
         c4.metric("Unowned", unowned_count)
 
     st.dataframe(out, use_container_width=True, hide_index=True, height=700)
+
+    if has_faab:
+        st.caption(
+            "Bid bucket (*The Process* pp. 200–201): 🩹 triage = cheap gap-fill "
+            "/ warm body; 🎯 tactical = short-term add; 🏆 strategic = "
+            "difference-maker or contested market. FTN $ is price/heat, not "
+            "quality — hyped prospects stay strategic even with weak RoS. "
+            "Does not feed the lineup optimizer or FAAB what-if."
+        )
 
     if unmatched_count > 0:
         with st.expander(
