@@ -30,6 +30,7 @@ from lineup_weights import (
     weights_from_plan_rows,
 )
 from projection_divergence import flag_caption, summarize_player_flags
+from team_defaults import default_index, matching_index
 from two_start_pitchers import (
     build_two_start_rows,
     schedule_bucket_caption,
@@ -620,17 +621,11 @@ with tab_faab:
             .unique()
             .tolist()
         )
-        default_owner_idx = 0
-        for i, o in enumerate(wi_owners):
-            if "Nolen" in str(o):
-                default_owner_idx = i
-                break
-
         wi_owner = st.selectbox(
             "Your team (roster to optimize)",
             wi_owners,
-            index=default_owner_idx if wi_owners else 0,
-            key="faab_whatif_owner",
+            index=default_index(wi_owners),
+            key=f"faab_whatif_owner_{league_key}",
         )
 
         fa_mask = wi_lineup["owner"].isna() | (wi_lineup["owner"] == "")
@@ -1077,7 +1072,8 @@ with tab_lineup:
     selected_owner = st.selectbox(
         "Owner (team to optimize)",
         owner_options,
-        key="lineup_owner",
+        index=default_index(owner_options),
+        key=f"lineup_owner_{league_key}",
     )
 
     fmt = lineup_df["format"].dropna().iloc[0]
@@ -1164,15 +1160,15 @@ with tab_lineup:
             ),
         )
         preferred_plan = [t for t in team_options_plan if t == selected_owner]
+        if preferred_plan:
+            plan_idx = team_options_plan.index(preferred_plan[0])
+        else:
+            plan_idx = default_index(team_options_plan)
         plan_team = st.selectbox(
             "Overall standings team (for Team-fit weights)",
             team_options_plan,
-            index=(
-                team_options_plan.index(preferred_plan[0])
-                if preferred_plan
-                else 0
-            ),
-            key="lineup_plan_team",
+            index=plan_idx,
+            key=f"lineup_plan_team_{league_key}",
             disabled=(obj_choice != OBJECTIVE_TEAM_FIT),
         )
         if obj_choice == OBJECTIVE_TEAM_FIT:
@@ -1845,17 +1841,35 @@ with tab_overall:
         lineup_owners = set(
             lineup_df["owner"].dropna().loc[lineup_df["owner"] != ""].unique()
         )
-    preferred = [t for t in team_options if t in lineup_owners]
-    default_idx = team_options.index(preferred[0]) if preferred else 0
+
+    team_owner_aliases = {}
+    if (
+        not overview_df.empty
+        and "team" in overview_df.columns
+        and "owner" in overview_df.columns
+    ):
+        for rec in (
+            overview_df[["team", "owner"]]
+            .drop_duplicates()
+            .to_dict(orient="records")
+        ):
+            team_owner_aliases[rec["team"]] = rec.get("owner")
+
+    nolen_idx = matching_index(team_options, aliases=team_owner_aliases)
+    if nolen_idx is not None:
+        default_idx = nolen_idx
+    else:
+        preferred = [t for t in team_options if t in lineup_owners]
+        default_idx = team_options.index(preferred[0]) if preferred else 0
 
     selected_team = st.selectbox(
         "Overall team",
         team_options,
         index=default_idx,
-        key="overall_team",
+        key=f"overall_team_{league_key}",
         help=(
-            "Matched by team name / roster owner identity, not by current "
-            "rank."
+            "Defaults to a %nolen% team/owner match for this league; "
+            "change freely. Identity is team name / owner, not current rank."
         ),
     )
 
