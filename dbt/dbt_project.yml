@@ -34,6 +34,8 @@ seeds:
       +tags: [inseason]
     projection_divergence_thresholds:
       +tags: [inseason]
+    faab_bid_bucket_thresholds:
+      +tags: [inseason]
 
 
 # Configuring models

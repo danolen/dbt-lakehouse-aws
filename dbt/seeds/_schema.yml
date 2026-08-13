@@ -30,3 +30,50 @@ seeds:
       - name: min_sample_volume
         data_tests:
           - not_null
+
+  - name: faab_bid_bucket_thresholds
+    description: >-
+      Configurable cutoffs for mart_faab_worksheet.bid_bucket (#61).
+      Cheap / expensive / borderline FTN heat, high-own unlisted-FTN
+      floor, FA scarcity count, and the owner_name_pattern used to find
+      "your" roster for gap flags. Edit here — do not hardcode in Streamlit.
+    config:
+      # Athena seed load: agate infers INT when every cell looks whole,
+      # then fails casting CSV ``'5.0'`` → INT. Force doubles.
+      column_types:
+        cheap_high_bid_max: double
+        cheap_pct_of_faab_max: double
+        expensive_high_bid_min: double
+        expensive_pct_of_faab_min: double
+        borderline_high_bid_min: double
+        high_own_pct_min: double
+        scarce_fa_count_max: double
+        ros_value_keeper_min: double
+    columns:
+      - name: cheap_high_bid_max
+        data_tests:
+          - not_null
+      - name: cheap_pct_of_faab_max
+        data_tests:
+          - not_null
+      - name: expensive_high_bid_min
+        data_tests:
+          - not_null
+      - name: expensive_pct_of_faab_min
+        data_tests:
+          - not_null
+      - name: borderline_high_bid_min
+        data_tests:
+          - not_null
+      - name: high_own_pct_min
+        data_tests:
+          - not_null
+      - name: scarce_fa_count_max
+        data_tests:
+          - not_null
+      - name: ros_value_keeper_min
+        data_tests:
+          - not_null
+      - name: owner_name_pattern
+        data_tests:
+          - not_null
