@@ -65,9 +65,37 @@ class WhatIfResult:
     starts_friday_only: bool = False
 
 
+def _norm_id(value: Any) -> Optional[str]:
+    """Canonical player id so ``10287``, ``10287.0``, and ``"10287"`` match."""
+    if value is None:
+        return None
+    try:
+        if value != value:  # NaN
+            return None
+    except TypeError:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none", "<na>"}:
+        return None
+    try:
+        return str(int(float(text)))
+    except (TypeError, ValueError):
+        return text
+
+
 def _row_type(player: Mapping[str, Any]) -> str:
     rt = player.get("row_type")
-    return str(rt) if rt else "hitter"
+    if rt is None:
+        return "hitter"
+    try:
+        if rt != rt:  # NaN
+            return "hitter"
+    except TypeError:
+        return "hitter"
+    text = str(rt).strip().lower()
+    if not text or text in {"nan", "none", "<na>"}:
+        return "hitter"
+    return text
 
 
 def _player_key(player: Mapping[str, Any]) -> tuple[Any, str]:
@@ -79,11 +107,16 @@ def _find_player(
     nfbc_id: Any,
     row_type: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
-    target = str(nfbc_id)
+    target = _norm_id(nfbc_id)
+    if target is None:
+        return None
+    want_rt = None
+    if row_type is not None:
+        want_rt = str(row_type).strip().lower()
     for p in players:
-        if str(p.get("nfbc_id")) != target:
+        if _norm_id(p.get("nfbc_id")) != target:
             continue
-        if row_type is not None and _row_type(p) != row_type:
+        if want_rt is not None and _row_type(p) != want_rt:
             continue
         return dict(p)
     return None
@@ -93,12 +126,59 @@ def _finite(value: Any) -> Optional[float]:
     if value is None:
         return None
     try:
+        if value != value:  # NaN; pd.NA raises TypeError
+            return None
+    except TypeError:
+        return None
+    try:
         out = float(value)
     except (TypeError, ValueError):
         return None
     if out != out:  # NaN
         return None
     return out
+
+
+def _lookup(player: Mapping[str, Any], *names: str) -> Any:
+    """Read a stat, ignoring key case (Athena vs pandas)."""
+    if not player:
+        return None
+    for name in names:
+        if name in player:
+            return player[name]
+    lowered = {str(k).strip().lower(): v for k, v in player.items()}
+    for name in names:
+        key = name.strip().lower()
+        if key in lowered:
+            return lowered[key]
+    return None
+
+
+def _is_pitcher(player: Mapping[str, Any]) -> bool:
+    pos = str(
+        _lookup(player, "pos_raw", "pos", "pitcher_pos") or ""
+    ).upper()
+    tokens = {t.strip() for t in pos.replace(",", " ").split() if t.strip()}
+    pos_is_p = bool(tokens & {"P", "SP", "RP", "PITCHER"})
+    has_p = any(
+        _finite(_lookup(player, k)) is not None
+        for k in ("ip", "gs", "era", "whip")
+    )
+    has_h = any(
+        _finite(_lookup(player, k)) is not None
+        for k in ("hr", "rbi", "r", "sb")
+    )
+    # fillna("hitter") / missing row_type still formats SP/RP with pitching lines.
+    if pos_is_p and has_p and not has_h:
+        return True
+    rt = _row_type(player)
+    if rt in {"pitcher", "p", "sp", "rp"}:
+        return True
+    if rt in {"hitter", "h", "batter", "b"}:
+        return False
+    if pos_is_p:
+        return True
+    return has_p and not has_h
 
 
 def _fmt_count(value: Any, decimals: int = 1) -> Optional[str]:
@@ -131,39 +211,48 @@ def _join_stat_parts(parts: Sequence[Optional[str]]) -> str:
     return " · ".join(p for p in parts if p)
 
 
-def format_projected_stats(player: Mapping[str, Any]) -> str:
+def format_projected_stats(player: Optional[Mapping[str, Any]]) -> str:
     """Weekly projection line for ranking tables.
 
     Hitters: R, HR, RBI, SB, AVG. Pitchers: GS (if starts), IP, W, SV
     (if projected), K, ERA, WHIP. Missing pieces are omitted.
     """
-    if _row_type(player) == "pitcher":
-        gs = _finite(player.get("gs"))
-        sv = _finite(player.get("sv"))
+    if not player:
+        return ""
+    if _is_pitcher(player):
+        gs = _finite(_lookup(player, "gs", "projected_starts"))
+        sv = _finite(_lookup(player, "sv"))
+        ip = _lookup(player, "ip", "innings")
+        wins = _lookup(player, "w", "wins")
+        k = _lookup(player, "k", "so", "strikeouts")
+        era = _lookup(player, "era")
+        whip = _lookup(player, "whip")
         parts = [
             f"{_fmt_count(gs, 0)} GS" if gs and gs > 0 else None,
-            f"{_fmt_count(player.get('ip'))} IP" if _finite(player.get("ip")) is not None else None,
-            f"{_fmt_count(player.get('w'))} W" if _finite(player.get("w")) is not None else None,
+            f"{_fmt_count(ip)} IP" if _finite(ip) is not None else None,
+            f"{_fmt_count(wins)} W" if _finite(wins) is not None else None,
             f"{_fmt_count(sv)} SV" if sv is not None and sv > 0 else None,
-            f"{_fmt_count(player.get('k'))} K" if _finite(player.get("k")) is not None else None,
-            f"{_fmt_rate(player.get('era'))} ERA" if _finite(player.get("era")) is not None else None,
-            f"{_fmt_rate(player.get('whip'))} WHIP" if _finite(player.get("whip")) is not None else None,
+            f"{_fmt_count(k)} K" if _finite(k) is not None else None,
+            f"{_fmt_rate(era)} ERA" if _finite(era) is not None else None,
+            f"{_fmt_rate(whip)} WHIP" if _finite(whip) is not None else None,
         ]
         return _join_stat_parts(parts)
 
-    avg = player.get("batting_avg")
+    avg = _lookup(player, "batting_avg", "avg", "ba")
     if _finite(avg) is None:
-        avg = player.get("avg")
-    if _finite(avg) is None:
-        hits = _finite(player.get("hits"))
-        ab = _finite(player.get("ab"))
+        hits = _finite(_lookup(player, "hits"))
+        ab = _finite(_lookup(player, "ab"))
         if hits is not None and ab and ab > 0:
             avg = hits / ab
+    r = _lookup(player, "r", "runs")
+    hr = _lookup(player, "hr", "home_runs")
+    rbi = _lookup(player, "rbi")
+    sb = _lookup(player, "sb", "stolen_bases")
     parts = [
-        f"{_fmt_count(player.get('r'))} R" if _finite(player.get("r")) is not None else None,
-        f"{_fmt_count(player.get('hr'))} HR" if _finite(player.get("hr")) is not None else None,
-        f"{_fmt_count(player.get('rbi'))} RBI" if _finite(player.get("rbi")) is not None else None,
-        f"{_fmt_count(player.get('sb'))} SB" if _finite(player.get("sb")) is not None else None,
+        f"{_fmt_count(r)} R" if _finite(r) is not None else None,
+        f"{_fmt_count(hr)} HR" if _finite(hr) is not None else None,
+        f"{_fmt_count(rbi)} RBI" if _finite(rbi) is not None else None,
+        f"{_fmt_count(sb)} SB" if _finite(sb) is not None else None,
         f"{_fmt_avg(avg)} AVG" if _finite(avg) is not None else None,
     ]
     return _join_stat_parts(parts)
