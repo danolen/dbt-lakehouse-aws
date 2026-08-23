@@ -887,6 +887,7 @@ with tab_faab:
                             "Add": fa_labels.get(
                                 str(r["add_nfbc_id"]), str(r["add_nfbc_id"])
                             ),
+                            "Projected": r.get("projected_stats") or "",
                             "Drop": r.get("drop_nfbc_id"),
                             "Δ weekly $": r.get("net_weekly_value"),
                             "Δ overall pts (est.)": r.get(
@@ -907,6 +908,8 @@ with tab_faab:
                     rank_view, use_container_width=True, hide_index=True
                 )
                 st.caption(
+                    "Projected is the weekly Razzball line: R/HR/RBI/SB/AVG "
+                    "for hitters, GS/IP/W/SV/K/ERA/WHIP for pitchers. "
                     "Candidates whose team-fit deltas differ by less than the "
                     "local noise floor share a tie rank (T#). The optimizer "
                     "itself stays deterministic."

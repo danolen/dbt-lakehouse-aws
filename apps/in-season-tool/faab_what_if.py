@@ -89,6 +89,86 @@ def _find_player(
     return None
 
 
+def _finite(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if out != out:  # NaN
+        return None
+    return out
+
+
+def _fmt_count(value: Any, decimals: int = 1) -> Optional[str]:
+    num = _finite(value)
+    if num is None:
+        return None
+    if abs(num - round(num)) < 1e-9:
+        return str(int(round(num)))
+    return f"{num:.{decimals}f}"
+
+
+def _fmt_avg(value: Any) -> Optional[str]:
+    num = _finite(value)
+    if num is None:
+        return None
+    rendered = f"{num:.3f}"
+    if rendered.startswith("0"):
+        rendered = rendered[1:]
+    return rendered
+
+
+def _fmt_rate(value: Any, decimals: int = 2) -> Optional[str]:
+    num = _finite(value)
+    if num is None:
+        return None
+    return f"{num:.{decimals}f}"
+
+
+def _join_stat_parts(parts: Sequence[Optional[str]]) -> str:
+    return " · ".join(p for p in parts if p)
+
+
+def format_projected_stats(player: Mapping[str, Any]) -> str:
+    """Weekly projection line for ranking tables.
+
+    Hitters: R, HR, RBI, SB, AVG. Pitchers: GS (if starts), IP, W, SV
+    (if projected), K, ERA, WHIP. Missing pieces are omitted.
+    """
+    if _row_type(player) == "pitcher":
+        gs = _finite(player.get("gs"))
+        sv = _finite(player.get("sv"))
+        parts = [
+            f"{_fmt_count(gs, 0)} GS" if gs and gs > 0 else None,
+            f"{_fmt_count(player.get('ip'))} IP" if _finite(player.get("ip")) is not None else None,
+            f"{_fmt_count(player.get('w'))} W" if _finite(player.get("w")) is not None else None,
+            f"{_fmt_count(sv)} SV" if sv is not None and sv > 0 else None,
+            f"{_fmt_count(player.get('k'))} K" if _finite(player.get("k")) is not None else None,
+            f"{_fmt_rate(player.get('era'))} ERA" if _finite(player.get("era")) is not None else None,
+            f"{_fmt_rate(player.get('whip'))} WHIP" if _finite(player.get("whip")) is not None else None,
+        ]
+        return _join_stat_parts(parts)
+
+    avg = player.get("batting_avg")
+    if _finite(avg) is None:
+        avg = player.get("avg")
+    if _finite(avg) is None:
+        hits = _finite(player.get("hits"))
+        ab = _finite(player.get("ab"))
+        if hits is not None and ab and ab > 0:
+            avg = hits / ab
+    parts = [
+        f"{_fmt_count(player.get('r'))} R" if _finite(player.get("r")) is not None else None,
+        f"{_fmt_count(player.get('hr'))} HR" if _finite(player.get("hr")) is not None else None,
+        f"{_fmt_count(player.get('rbi'))} RBI" if _finite(player.get("rbi")) is not None else None,
+        f"{_fmt_count(player.get('sb'))} SB" if _finite(player.get("sb")) is not None else None,
+        f"{_fmt_avg(avg)} AVG" if _finite(avg) is not None else None,
+    ]
+    return _join_stat_parts(parts)
+
+
 def _dollars(player: Mapping[str, Any]) -> float:
     for key in ("dollars_monday_thursday", "dollars", "dollars_friday_sunday"):
         val = player.get(key)
@@ -449,6 +529,7 @@ def rank_candidates(
                     "add_nfbc_id": cid,
                     "ok": False,
                     "message": "unmatched / empty candidate",
+                    "projected_stats": "",
                     "net_weekly_value": None,
                     "net_overall_pts_estimate": None,
                     "any_within_noise": None,
@@ -486,6 +567,7 @@ def rank_candidates(
                 "add_nfbc_id": cid,
                 "ok": result.ok,
                 "message": result.message,
+                "projected_stats": format_projected_stats(add_player),
                 "net_weekly_value": result.net_weekly_value if result.ok else None,
                 "net_overall_pts_estimate": (
                     result.net_overall_pts_estimate if result.ok else None
@@ -584,6 +666,7 @@ __all__ = [
     "analyze_add_drop",
     "compute_category_deltas",
     "format_delta_rows",
+    "format_projected_stats",
     "rank_candidates",
     "starters_table",
     "suggest_drop",
