@@ -12,6 +12,7 @@ from faab_what_if import (
     analyze_add_drop,
     compute_category_deltas,
     format_delta_rows,
+    format_projected_stats,
     rank_candidates,
     starters_table,
 )
@@ -419,3 +420,70 @@ def test_monday_only_start_uses_weekend_bat_for_friday():
     assert by_cat["R"].baseline == pytest.approx(4.0)
     assert by_cat["R"].what_if == pytest.approx(7.0)
     assert by_cat["R"].delta_raw == pytest.approx(3.0)
+
+
+def test_format_projected_stats_hitter_uses_counting_and_avg():
+    line = format_projected_stats(
+        hitter(
+            1,
+            ["OF"],
+            10.0,
+            r=3.2,
+            hr=1.1,
+            rbi=3.4,
+            sb=0.4,
+            hits=6.0,
+            ab=21.0,
+        )
+    )
+    assert line == "3.2 R · 1.1 HR · 3.4 RBI · 0.4 SB · .286 AVG"
+
+
+def test_format_projected_stats_pitcher_and_reliever():
+    starter = format_projected_stats(
+        pitcher(
+            2,
+            12.0,
+            gs=2,
+            ip=10.9,
+            w=0.7,
+            sv=0.0,
+            k=11.4,
+            era=3.62,
+            whip=1.19,
+        )
+    )
+    assert starter == "2 GS · 10.9 IP · 0.7 W · 11.4 K · 3.62 ERA · 1.19 WHIP"
+    assert "SV" not in starter
+
+    reliever = format_projected_stats(
+        pitcher(3, 8.0, gs=0, ip=2.8, w=0.1, sv=1.3, k=3.2, era=2.90, whip=1.07)
+    )
+    assert reliever == "2.8 IP · 0.1 W · 1.3 SV · 3.2 K · 2.90 ERA · 1.07 WHIP"
+    assert "GS" not in reliever
+
+
+def test_rank_candidates_includes_projected_stats():
+    roster = [hitter(1, ["OF"], 5.0, r=1.0, hr=0.0, rbi=1.0, sb=0.0, hits=2.0, ab=10.0)]
+    add = hitter(
+        10,
+        ["OF"],
+        20.0,
+        r=4.0,
+        hr=2,
+        rbi=5.0,
+        sb=1.0,
+        batting_avg=0.310,
+    )
+    ranked = rank_candidates(
+        roster,
+        {"OF": 1},
+        [10, 999],
+        free_agents=[add],
+        drop_key=(1, "hitter"),
+        auto_suggest_drop=False,
+        rank_mode=RANK_MODE_WEEKLY,
+    )
+    by_id = {str(r["add_nfbc_id"]): r for r in ranked}
+    assert by_id["10"]["projected_stats"] == "4 R · 2 HR · 5 RBI · 1 SB · .310 AVG"
+    assert by_id["999"]["projected_stats"] == ""
