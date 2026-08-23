@@ -11,6 +11,14 @@ updates:
     labels:
       - chore
       - area:platform
+    # Lift once dbt-core-experimental-parser >=2.0.0b1 publishes real PyPI
+    # wheels again. 2.0.0a5+ are tiny sdists that download ~50MB wheels from
+    # GitHub Releases at install time and flake CI (PR #246). dbt-core 1.12.1+
+    # requires parser>=2.0.0b1, so it cannot move while we stay on 2.0.0a4
+    # (Dependabot PRs #254 / #255).
+    ignore:
+      - dependency-name: "dbt-core"
+      - dependency-name: "dbt-core-experimental-parser"
 
   - package-ecosystem: github-actions
     directory: /
