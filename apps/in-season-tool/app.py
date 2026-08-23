@@ -18,6 +18,7 @@ from faab_what_if import (
     RANK_MODE_WEEKLY,
     analyze_add_drop,
     format_delta_rows,
+    format_projected_stats,
     rank_candidates,
     starters_table,
 )
@@ -876,6 +877,19 @@ with tab_faab:
                 if warn:
                     st.warning(warn)
 
+                def _projected_cell(row):
+                    pid = row.get("add_nfbc_id")
+                    player = fa_by_id.get(str(pid)) if pid is not None else None
+                    if player is None and pid is not None:
+                        try:
+                            player = fa_by_id.get(str(int(float(pid))))
+                        except (TypeError, ValueError):
+                            player = None
+                    line = format_projected_stats(player)
+                    if line:
+                        return line
+                    return row.get("projected_stats") or ""
+
                 rank_view = pd.DataFrame(
                     [
                         {
@@ -887,7 +901,7 @@ with tab_faab:
                             "Add": fa_labels.get(
                                 str(r["add_nfbc_id"]), str(r["add_nfbc_id"])
                             ),
-                            "Projected": r.get("projected_stats") or "",
+                            "Projected": _projected_cell(r),
                             "Drop": r.get("drop_nfbc_id"),
                             "Δ weekly $": r.get("net_weekly_value"),
                             "Δ overall pts (est.)": r.get(
@@ -903,9 +917,27 @@ with tab_faab:
                         for r in ranked
                     ]
                 )
+                if "Projected" in rank_view.columns:
+                    rank_view["Projected"] = [
+                        "" if v is None else str(v)
+                        for v in rank_view["Projected"].tolist()
+                    ]
                 st.markdown("#### Candidate ranking")
                 st.dataframe(
-                    rank_view, use_container_width=True, hide_index=True
+                    rank_view,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Projected": st.column_config.TextColumn(
+                            "Projected",
+                            width="large",
+                            help=(
+                                "Weekly Razzball line from lineup inputs: "
+                                "R/HR/RBI/SB/AVG for hitters, "
+                                "GS/IP/W/SV/K/ERA/WHIP for pitchers."
+                            ),
+                        ),
+                    },
                 )
                 st.caption(
                     "Projected is the weekly Razzball line: R/HR/RBI/SB/AVG "

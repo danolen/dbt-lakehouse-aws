@@ -487,3 +487,96 @@ def test_rank_candidates_includes_projected_stats():
     by_id = {str(r["add_nfbc_id"]): r for r in ranked}
     assert by_id["10"]["projected_stats"] == "4 R · 2 HR · 5 RBI · 1 SB · .310 AVG"
     assert by_id["999"]["projected_stats"] == ""
+
+
+def test_format_projected_stats_pitcher_without_row_type_uses_pos():
+    p = pitcher(
+        2,
+        12.0,
+        gs=2,
+        ip=10.9,
+        w=0.7,
+        sv=0.0,
+        k=11.4,
+        era=3.62,
+        whip=1.19,
+    )
+    p.pop("row_type")
+    line = format_projected_stats(p)
+    assert line == "2 GS · 10.9 IP · 0.7 W · 11.4 K · 3.62 ERA · 1.19 WHIP"
+
+
+def test_format_projected_stats_hitter_uppercase_keys():
+    line = format_projected_stats(
+        {
+            "row_type": "HITTER",
+            "R": 2.0,
+            "HR": 0.9,
+            "RBI": 2.1,
+            "SB": 0.2,
+            "AVG": 0.184,
+        }
+    )
+    assert line == "2 R · 0.9 HR · 2.1 RBI · 0.2 SB · .184 AVG"
+
+
+def test_rank_candidates_matches_float_nfbc_id_to_string_candidate():
+    roster = [hitter(1, ["OF"], 5.0, r=1.0, hr=0.0, rbi=1.0, sb=0.0, hits=2.0, ab=10.0)]
+    add = hitter(
+        10,
+        ["OF"],
+        20.0,
+        r=4.0,
+        hr=2,
+        rbi=5.0,
+        sb=1.0,
+        batting_avg=0.310,
+    )
+    add["nfbc_id"] = 10.0
+    ranked = rank_candidates(
+        roster,
+        {"OF": 1},
+        ["10"],
+        free_agents=[add],
+        drop_key=(1, "hitter"),
+        auto_suggest_drop=False,
+        rank_mode=RANK_MODE_WEEKLY,
+    )
+    assert ranked[0]["ok"] is True
+    assert ranked[0]["projected_stats"] == "4 R · 2 HR · 5 RBI · 1 SB · .310 AVG"
+
+
+def test_rank_view_projected_column_stays_string():
+    import pandas as pd
+
+    roster = [hitter(1, ["OF"], 5.0, r=1.0, hr=0.0, rbi=1.0, sb=0.0, hits=2.0, ab=10.0)]
+    add = hitter(
+        10,
+        ["OF"],
+        20.0,
+        r=4.0,
+        hr=2,
+        rbi=5.0,
+        sb=1.0,
+        batting_avg=0.310,
+    )
+    ranked = rank_candidates(
+        roster,
+        {"OF": 1},
+        [10],
+        free_agents=[add],
+        drop_key=(1, "hitter"),
+        auto_suggest_drop=False,
+        rank_mode=RANK_MODE_WEEKLY,
+    )
+    view = pd.DataFrame(
+        [
+            {
+                "Add": "H10 (OF)",
+                "Projected": r.get("projected_stats") or "",
+            }
+            for r in ranked
+        ]
+    )
+    view["Projected"] = ["" if v is None else str(v) for v in view["Projected"].tolist()]
+    assert view["Projected"].iloc[0] == "4 R · 2 HR · 5 RBI · 1 SB · .310 AVG"
