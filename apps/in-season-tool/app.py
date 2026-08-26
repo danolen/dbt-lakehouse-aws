@@ -13,7 +13,7 @@ from pyathena import connect
 from pyathena.pandas.cursor import PandasCursor
 
 from faab_bid_bucket import BUCKET_LABELS, format_bid_bucket
-from faab_theoretical_bid import THEORETICAL_BID_CAPTION, THEORETICAL_BID_HELP
+from faab_theoretical_bid import THEORETICAL_BID_CAPTION, THEORETICAL_BID_HELP, attach_theoretical_bid
 from faab_what_if import (
     RANK_MODE_OVERALL,
     RANK_MODE_WEEKLY,
@@ -318,6 +318,12 @@ with tab_faab:
     except Exception as e:
         st.error(f"Failed to load data from Athena: {e}")
         st.stop()
+
+    try:
+        league_cfg_faab = load_league_config()
+    except Exception:
+        league_cfg_faab = pd.DataFrame()
+    df = attach_theoretical_bid(df, format_for_league(league_cfg_faab, league_key))
 
     # League-level FAAB budget (full table, not sidebar filters) for help UI.
     league_has_faab = (
