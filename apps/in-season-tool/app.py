@@ -84,6 +84,7 @@ ATHENA_SEEDS_SCHEMA = get_config("ATHENA_SEEDS_SCHEMA", "dbt")
 ATHENA_STAGE_SCHEMA = get_config("ATHENA_STAGE_SCHEMA", "dbt_stage")
 ATHENA_REGION = get_config("ATHENA_REGION", "us-east-1")
 ATHENA_S3_OUTPUT = get_config("ATHENA_S3_OUTPUT")
+ATHENA_WORKGROUP = get_config("ATHENA_WORKGROUP")
 
 for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_DEFAULT_REGION"):
     val = get_config(key, ATHENA_REGION if key == "AWS_DEFAULT_REGION" else None)
@@ -119,12 +120,15 @@ def _optimize_df(df):
 
 
 def _connect():
-    return connect(
-        s3_staging_dir=ATHENA_S3_OUTPUT,
-        region_name=ATHENA_REGION,
-        schema_name=ATHENA_SCHEMA,
-        cursor_class=PandasCursor,
-    )
+    kwargs = {
+        "s3_staging_dir": ATHENA_S3_OUTPUT,
+        "region_name": ATHENA_REGION,
+        "schema_name": ATHENA_SCHEMA,
+        "cursor_class": PandasCursor,
+    }
+    if ATHENA_WORKGROUP:
+        kwargs["work_group"] = ATHENA_WORKGROUP
+    return connect(**kwargs)
 
 
 @st.cache_data(ttl=900)
