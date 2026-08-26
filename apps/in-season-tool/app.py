@@ -13,6 +13,7 @@ from pyathena import connect
 from pyathena.pandas.cursor import PandasCursor
 
 from faab_bid_bucket import BUCKET_LABELS, format_bid_bucket
+from faab_theoretical_bid import THEORETICAL_BID_CAPTION, THEORETICAL_BID_HELP
 from faab_what_if import (
     RANK_MODE_OVERALL,
     RANK_MODE_WEEKLY,
@@ -456,6 +457,7 @@ with tab_faab:
         "ftn_type": "Type",
         "low_bid": "Low $",
         "high_bid": "High $",
+        "theoretical_bid": "Theoretical $",
         "pct_of_budget_display": "% of Budget",
         "bid_bucket_display": "Bucket",
         "ros_value": "RoS $",
@@ -476,6 +478,7 @@ with tab_faab:
     if not has_faab:
         COLUMNS.pop("pct_of_budget_display", None)
         COLUMNS.pop("bid_bucket_display", None)
+        COLUMNS.pop("theoretical_bid", None)
 
     sort_cols = [
         c for c in ["has_ftn_rec", "high_bid", "ros_value"] if c in display.columns
@@ -498,7 +501,20 @@ with tab_faab:
         if col in out.columns:
             out[col] = out[col].round(1)
 
+    if "theoretical_bid" in out.columns:
+        out["theoretical_bid"] = pd.to_numeric(
+            out["theoretical_bid"], errors="coerce"
+        ).round().astype("Int64")
+
     out = out.rename(columns=visible)
+
+    worksheet_column_config = {}
+    if "Theoretical $" in out.columns:
+        worksheet_column_config["Theoretical $"] = st.column_config.NumberColumn(
+            "Theoretical $",
+            help=THEORETICAL_BID_HELP,
+            format="$%d",
+        )
 
     st.subheader(f"FAAB Worksheet — {selected_league}")
 
@@ -563,7 +579,13 @@ with tab_faab:
         )
         c4.metric("Unowned", unowned_count)
 
-    st.dataframe(out, use_container_width=True, hide_index=True, height=700)
+    st.dataframe(
+        out,
+        use_container_width=True,
+        hide_index=True,
+        height=700,
+        column_config=worksheet_column_config or None,
+    )
 
     if has_faab:
         st.caption(
@@ -573,6 +595,8 @@ with tab_faab:
             "quality — hyped prospects stay strategic even with weak RoS. "
             "Does not feed the lineup optimizer or FAAB what-if."
         )
+        if "Theoretical $" in out.columns:
+            st.caption(THEORETICAL_BID_CAPTION)
 
     if unmatched_count > 0:
         with st.expander(

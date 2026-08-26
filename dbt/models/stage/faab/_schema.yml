@@ -28,3 +28,9 @@ models:
           - accepted_values:
               arguments:
                 values: ['triage', 'tactical', 'strategic']
+
+  - name: int_faab_theoretical_bid
+    description: >-
+      Slim formula harness for dbt unit tests of faab_theoretical_bid
+      (#62 / The Process p. 199). Empty in production; mart_faab_worksheet
+      applies the same macro. Observability only. Not queried by Streamlit.

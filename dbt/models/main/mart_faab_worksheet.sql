@@ -4,8 +4,9 @@
     )
 }}
 
--- FAAB worksheet plus bid_bucket (#61 / The Process pp. 200–201).
--- bid_bucket is observability only — never feed optimize_week or FAAB what-if.
+-- FAAB worksheet plus bid_bucket (#61 / pp. 200–201) and theoretical_bid
+-- (#62 / p. 199). Both are observability only — never feed optimize_week
+-- or FAAB what-if.
 
 with league_config as (
     select
@@ -164,8 +165,20 @@ select
         't.borderline_high_bid_min',
         't.high_own_pct_min',
         't.ros_value_keeper_min'
-    ) }} as bid_bucket
+    ) }} as bid_bucket,
+    -- Share of remaining FAAB implied by positive RoS $ vs a per-format
+    -- remaining-undrafted-value baseline (seed). Adapted from The Process
+    -- p. 199 (book uses full-season waiver pool × league allowance).
+    {{ faab_theoretical_bid(
+        'b.ros_value',
+        'b.my_faab_remaining',
+        'tb.projected_remaining_undrafted_value'
+    ) }} as theoretical_bid
 from base b
 left join {{ ref('int_faab_bid_bucket_context') }} c
     on b.league = c.league
+left join league_config lc
+    on b.league = lc.league
+left join {{ ref('faab_theoretical_bid_baseline') }} tb
+    on lc.format = tb.format
 cross join thresholds t
