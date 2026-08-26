@@ -77,3 +77,25 @@ seeds:
       - name: owner_name_pattern
         data_tests:
           - not_null
+
+  - name: faab_theoretical_bid_baseline
+    description: >-
+      Per-format placeholder for projected remaining undrafted ROS-$
+      (the denominator of theoretical_bid, #62 / The Process p. 199).
+      Not a book figure — start here and iterate with history. Edit
+      here; do not hardcode the pool in Streamlit. Join on
+      league_config.format (oc / me / 50s).
+    config:
+      column_types:
+        projected_remaining_undrafted_value: double
+    columns:
+      - name: format
+        data_tests:
+          - not_null
+          - unique
+          - accepted_values:
+              arguments:
+                values: ['oc', 'me', '50s']
+      - name: projected_remaining_undrafted_value
+        data_tests:
+          - not_null

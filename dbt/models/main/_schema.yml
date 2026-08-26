@@ -8,8 +8,10 @@ models:
       (league, player). Homonyms (e.g. two Max Muncys) share a display name
       but different nfbc_ids. bid_bucket is a role label (triage / tactical
       / strategic) from The Process pp. 200–201 — not an FTN dollar tertile.
-      Null when remaining FAAB is 0. Observability only: never feed the
-      lineup optimizer or FAAB what-if scoring.
+      theoretical_bid is the p. 199 share of remaining FAAB
+      (positive ros_value / per-format remaining-undrafted baseline).
+      Both are null when remaining FAAB is 0. Observability only: never
+      feed the lineup optimizer or FAAB what-if scoring.
     columns:
       - name: league
         data_tests:
@@ -31,6 +33,15 @@ models:
           - accepted_values:
               arguments:
                 values: ['triage', 'tactical', 'strategic']
+      - name: theoretical_bid
+        description: >-
+          Integer FAAB dollars from The Process p. 199, adapted per #62:
+          (greatest(ros_value, 0) / projected_remaining_undrafted_value)
+          × my_faab_remaining. Denominator is the per-format placeholder
+          in seed faab_theoretical_bid_baseline (not a book figure).
+          Null when remaining FAAB is 0 / missing, when the baseline is
+          missing, or when ros_value is null (no weekly ROS context).
+          Non-positive ROS yields 0. Observability only.
     data_tests:
       # Matched / weekly rows: identity is NFBC id (handles name collisions).
       - dbt_utils.unique_combination_of_columns:

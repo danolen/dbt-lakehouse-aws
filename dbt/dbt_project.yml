@@ -36,6 +36,8 @@ seeds:
       +tags: [inseason]
     faab_bid_bucket_thresholds:
       +tags: [inseason]
+    faab_theoretical_bid_baseline:
+      +tags: [inseason]
 
 
 # Configuring models

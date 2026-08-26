@@ -1,0 +1,75 @@
+version: 2
+
+# Slim-model unit tests for theoretical_bid (#62). Do not mock the full
+# mart_faab_worksheet join — only the formula inputs.
+
+unit_tests:
+  - name: test_faab_theoretical_bid_formula_cases
+    description: >-
+      #62 / p. 199 adapted: (positive ros_value / remaining undrafted
+      baseline) × remaining FAAB. Null ROS or no remaining budget → null;
+      non-positive ROS → 0; zero/missing baseline → null.
+    model: int_faab_theoretical_bid
+    given:
+      - input: ref('int_faab_theoretical_bid_inputs')
+        format: sql
+        rows: |
+          select
+            cast('positive_ros' as varchar) as case_id,
+            cast(20.0 as double) as ros_value,
+            327 as my_faab_remaining,
+            cast(350.0 as double) as projected_remaining_undrafted_value
+          union all
+          select
+            'zero_ros',
+            cast(0.0 as double),
+            327,
+            cast(350.0 as double)
+          union all
+          select
+            'negative_ros',
+            cast(-5.0 as double),
+            327,
+            cast(350.0 as double)
+          union all
+          select
+            'null_ros_ftn_only',
+            cast(null as double),
+            327,
+            cast(350.0 as double)
+          union all
+          select
+            'no_faab_50s',
+            cast(20.0 as double),
+            0,
+            cast(250.0 as double)
+          union all
+          select
+            'null_budget',
+            cast(20.0 as double),
+            cast(null as int),
+            cast(350.0 as double)
+          union all
+          select
+            'zero_baseline',
+            cast(20.0 as double),
+            327,
+            cast(0.0 as double)
+          union all
+          select
+            'me_format_share',
+            cast(45.0 as double),
+            108,
+            cast(450.0 as double)
+    expect:
+      rows:
+        # 20 / 350 * 327 = 18.6857 → 19
+        - {case_id: positive_ros, theoretical_bid: 19}
+        - {case_id: zero_ros, theoretical_bid: 0}
+        - {case_id: negative_ros, theoretical_bid: 0}
+        - {case_id: null_ros_ftn_only, theoretical_bid: null}
+        - {case_id: no_faab_50s, theoretical_bid: null}
+        - {case_id: null_budget, theoretical_bid: null}
+        - {case_id: zero_baseline, theoretical_bid: null}
+        # 45 / 450 * 108 = 10.8 → 11
+        - {case_id: me_format_share, theoretical_bid: 11}

@@ -1,0 +1,4 @@
+format,projected_remaining_undrafted_value,notes
+oc,350.0,"#62 placeholder remaining-undrafted ROS-$ pool (12-team OC-scoring in this repo). Not a book figure — iterate with history."
+me,450.0,"#62 placeholder remaining-undrafted ROS-$ pool (15-team ME). Slightly larger FA pool than 12-team. Iterate with history."
+50s,250.0,"#62 placeholder; nolen_50 remaining FAAB is 0 so theoretical_bid stays null."

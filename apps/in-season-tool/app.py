@@ -13,6 +13,7 @@ from pyathena import connect
 from pyathena.pandas.cursor import PandasCursor
 
 from faab_bid_bucket import BUCKET_LABELS, format_bid_bucket
+from faab_theoretical_bid import THEORETICAL_BID_CAPTION, THEORETICAL_BID_HELP, attach_theoretical_bid
 from faab_what_if import (
     RANK_MODE_OVERALL,
     RANK_MODE_WEEKLY,
@@ -83,6 +84,7 @@ ATHENA_SEEDS_SCHEMA = get_config("ATHENA_SEEDS_SCHEMA", "dbt")
 ATHENA_STAGE_SCHEMA = get_config("ATHENA_STAGE_SCHEMA", "dbt_stage")
 ATHENA_REGION = get_config("ATHENA_REGION", "us-east-1")
 ATHENA_S3_OUTPUT = get_config("ATHENA_S3_OUTPUT")
+ATHENA_WORKGROUP = get_config("ATHENA_WORKGROUP")
 
 for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_DEFAULT_REGION"):
     val = get_config(key, ATHENA_REGION if key == "AWS_DEFAULT_REGION" else None)
@@ -118,12 +120,15 @@ def _optimize_df(df):
 
 
 def _connect():
-    return connect(
-        s3_staging_dir=ATHENA_S3_OUTPUT,
-        region_name=ATHENA_REGION,
-        schema_name=ATHENA_SCHEMA,
-        cursor_class=PandasCursor,
-    )
+    kwargs = {
+        "s3_staging_dir": ATHENA_S3_OUTPUT,
+        "region_name": ATHENA_REGION,
+        "schema_name": ATHENA_SCHEMA,
+        "cursor_class": PandasCursor,
+    }
+    if ATHENA_WORKGROUP:
+        kwargs["work_group"] = ATHENA_WORKGROUP
+    return connect(**kwargs)
 
 
 @st.cache_data(ttl=900)
@@ -318,6 +323,12 @@ with tab_faab:
         st.error(f"Failed to load data from Athena: {e}")
         st.stop()
 
+    try:
+        league_cfg_faab = load_league_config()
+    except Exception:
+        league_cfg_faab = pd.DataFrame()
+    df = attach_theoretical_bid(df, format_for_league(league_cfg_faab, league_key))
+
     # League-level FAAB budget (full table, not sidebar filters) for help UI.
     league_has_faab = (
         "my_faab_remaining" in df.columns
@@ -456,6 +467,7 @@ with tab_faab:
         "ftn_type": "Type",
         "low_bid": "Low $",
         "high_bid": "High $",
+        "theoretical_bid": "Theoretical $",
         "pct_of_budget_display": "% of Budget",
         "bid_bucket_display": "Bucket",
         "ros_value": "RoS $",
@@ -476,6 +488,7 @@ with tab_faab:
     if not has_faab:
         COLUMNS.pop("pct_of_budget_display", None)
         COLUMNS.pop("bid_bucket_display", None)
+        COLUMNS.pop("theoretical_bid", None)
 
     sort_cols = [
         c for c in ["has_ftn_rec", "high_bid", "ros_value"] if c in display.columns
@@ -498,7 +511,20 @@ with tab_faab:
         if col in out.columns:
             out[col] = out[col].round(1)
 
+    if "theoretical_bid" in out.columns:
+        out["theoretical_bid"] = pd.to_numeric(
+            out["theoretical_bid"], errors="coerce"
+        ).round().astype("Int64")
+
     out = out.rename(columns=visible)
+
+    worksheet_column_config = {}
+    if "Theoretical $" in out.columns:
+        worksheet_column_config["Theoretical $"] = st.column_config.NumberColumn(
+            "Theoretical $",
+            help=THEORETICAL_BID_HELP,
+            format="$%d",
+        )
 
     st.subheader(f"FAAB Worksheet — {selected_league}")
 
@@ -563,7 +589,13 @@ with tab_faab:
         )
         c4.metric("Unowned", unowned_count)
 
-    st.dataframe(out, use_container_width=True, hide_index=True, height=700)
+    st.dataframe(
+        out,
+        use_container_width=True,
+        hide_index=True,
+        height=700,
+        column_config=worksheet_column_config or None,
+    )
 
     if has_faab:
         st.caption(
@@ -573,6 +605,8 @@ with tab_faab:
             "quality — hyped prospects stay strategic even with weak RoS. "
             "Does not feed the lineup optimizer or FAAB what-if."
         )
+        if "Theoretical $" in out.columns:
+            st.caption(THEORETICAL_BID_CAPTION)
 
     if unmatched_count > 0:
         with st.expander(
