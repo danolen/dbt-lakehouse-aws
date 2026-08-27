@@ -13,6 +13,16 @@ from pyathena import connect
 from pyathena.pandas.cursor import PandasCursor
 
 from faab_bid_bucket import BUCKET_LABELS, format_bid_bucket
+from faab_budget_pacing import (
+    PACING_CAPTION,
+    STATUS_LABELS,
+    build_pacing_chart,
+    load_season_calendar,
+    marker_week,
+    pacing_snapshot,
+    parse_week_date,
+    season_week_number,
+)
 from faab_theoretical_bid import THEORETICAL_BID_CAPTION, THEORETICAL_BID_HELP, attach_theoretical_bid
 from faab_what_if import (
     RANK_MODE_OVERALL,
@@ -588,6 +598,86 @@ with tab_faab:
             else "—"
         )
         c4.metric("Unowned", unowned_count)
+
+    if league_has_faab:
+        rem_src = df if "my_faab_remaining" in df.columns else display
+        remaining_n = pd.to_numeric(rem_src["my_faab_remaining"], errors="coerce").dropna()
+        as_of_n = None
+        if "faab_as_of_date" in rem_src.columns and not rem_src["faab_as_of_date"].dropna().empty:
+            as_of_n = rem_src["faab_as_of_date"].dropna().iloc[0]
+        week_of_n = (
+            rem_src["week_of"].dropna().iloc[0]
+            if "week_of" in rem_src.columns and not rem_src["week_of"].dropna().empty
+            else week_val
+        )
+        weeks_remaining_n = None
+        try:
+            plan_pace = load_weekly_category_plan(league_key)
+            if (
+                plan_pace is not None
+                and not plan_pace.empty
+                and "weeks_remaining" in plan_pace.columns
+            ):
+                wr = pd.to_numeric(plan_pace["weeks_remaining"], errors="coerce").dropna()
+                if not wr.empty:
+                    weeks_remaining_n = int(wr.iloc[0])
+        except Exception:
+            weeks_remaining_n = None
+        season_start, periods = load_season_calendar()
+        if weeks_remaining_n is None:
+            week_date = parse_week_date(week_of_n, season_year=season_start.year)
+            if week_date is not None:
+                elapsed = season_week_number(week_date, season_start, periods)
+                weeks_remaining_n = max(1, periods - elapsed)
+        week_n = marker_week(
+            as_of_value=as_of_n,
+            week_of_value=week_of_n,
+            season_start=season_start,
+            periods=periods,
+        )
+        remaining_one = float(remaining_n.iloc[0]) if not remaining_n.empty else None
+        snap = pacing_snapshot(
+            remaining=remaining_one,
+            weeks_remaining=weeks_remaining_n,
+            week=week_n,
+            as_of_date=None if as_of_n is None else str(as_of_n),
+        )
+        if snap is not None:
+            p1, p2, p3 = st.columns(3)
+            p1.metric(
+                "Spent to date",
+                f"${snap.spent_to_date}",
+                help="starting_budget ($1,000) − my_faab_remaining. Not a weekly history.",
+            )
+            p2.metric(
+                "Pace",
+                STATUS_LABELS.get(snap.status, snap.status),
+                help=(
+                    f"Remaining ${snap.remaining} vs Elite ${snap.elite_remaining:.0f} "
+                    f"/ 1st quartile ${snap.q1_remaining:.0f} implied remaining at week "
+                    f"{snap.week}."
+                ),
+            )
+            p3.metric(
+                "$ / week left",
+                f"${snap.my_weekly_capacity:.0f}",
+                help=(
+                    f"Remaining ÷ {snap.weeks_remaining} weeks left. Elite "
+                    f"${snap.elite_weekly_capacity:.0f}/wk · 1st quartile "
+                    f"${snap.q1_weekly_capacity:.0f}/wk."
+                ),
+            )
+            st.plotly_chart(
+                build_pacing_chart(snap),
+                use_container_width=True,
+                config={"displayModeBar": False},
+            )
+            st.caption(PACING_CAPTION)
+            if snap.as_of_date:
+                st.caption(
+                    f"Remaining as of {snap.as_of_date} (season week {snap.week}). "
+                    "Update `dbt/seeds/faab_remaining.csv` after waivers."
+                )
 
     st.dataframe(
         out,

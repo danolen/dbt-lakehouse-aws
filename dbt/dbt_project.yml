@@ -38,6 +38,8 @@ seeds:
       +tags: [inseason]
     faab_theoretical_bid_baseline:
       +tags: [inseason]
+    faab_pacing_curves:
+      +tags: [inseason]
 
 
 # Configuring models
