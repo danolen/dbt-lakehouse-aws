@@ -99,3 +99,27 @@ seeds:
       - name: projected_remaining_undrafted_value
         data_tests:
           - not_null
+
+  - name: faab_pacing_curves
+    description: >-
+      Elite vs 1st-quartile cumulative FAAB spend by week from The Process
+      2025 Appendix p. 76 (Adam Warner). $1,000 NFBC budget, FAAB weeks
+      2–20 (week 1 is $0). Used by the in-season budget pacing widget
+      (#64). Do not invent weeks 21–26. Edit here — Streamlit reads the
+      same CSV from the repo.
+    config:
+      column_types:
+        week: int
+        elite_cumulative_spend: double
+        first_quartile_cumulative_spend: double
+    columns:
+      - name: week
+        data_tests:
+          - not_null
+          - unique
+      - name: elite_cumulative_spend
+        data_tests:
+          - not_null
+      - name: first_quartile_cumulative_spend
+        data_tests:
+          - not_null
