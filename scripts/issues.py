@@ -1083,16 +1083,53 @@ _add(
         **Outcome**
         A small chart in the FAAB Worksheet tab showing for the selected
         league:
-        - my cumulative FAAB spent by week (line)
         - Elite-tier vs. 1st-quartile cumulative spend curves from the
           2025 appendix research (shaded reference bands)
-        - 7-day forward burn-rate indicator (am I overspending or
-          hoarding?)
+        - a single current-week marker:
+          `spent_to_date = starting_budget − my_faab_remaining`
+        - a burn/hoard indicator from
+          `my_faab_remaining / weeks_remaining` vs what the book curve
+          implies you should still have at this week
+
+        **Why this is rescoped (2026-08-27)**
+        The original write-up asked for *my cumulative FAAB spent by
+        week* (a personal history line). That series does not exist.
+        Remaining FAAB is a single overwrite-in-place seed
+        (`dbt/seeds/faab_remaining.csv`: one remaining-$ figure +
+        `as_of_date` per league). A5.1 (#48) was closed not-planned:
+        NFBC standings exports have no FAAB Remaining column, so there
+        is also no automated history to join.
+
+        Do **not** interpolate a fake weekly spend line from one
+        remaining number.
+
+        Starting budget: NFBC default **$1,000** unless a
+        `starting_budget` is added to a seed / `league_config`. Weeks
+        remaining: `mart_weekly_category_plan`. Hide for draft-and-hold
+        (`nolen_50`, remaining = 0), same as other FAAB columns.
+
+        **Out of scope**
+        - Personal weekly spend history
+        - Opponent FAAB remaining
+        - NFBC scrape of remaining / pending claims
+
+        **Follow-up (not blocking this ticket)**
+        If we later want the original line chart, change
+        `faab_remaining.csv` to append-only weekly snapshots
+        (`league, as_of_date, my_faab_remaining`). Then
+        `spent[week] = starting_budget − remaining[week]`. Still a
+        manual seed, not an NFBC scrape.
 
         **Acceptance criteria**
-        - [ ] Renders for every league with a non-null FAAB budget in
-              `league_config`.
-        - [ ] Reference curves are values from the book; cite the page.
+        - [ ] Renders for every league with remaining FAAB > 0; hidden
+              for draft-and-hold (`nolen_50`).
+        - [ ] Book Elite / 1st-quartile curves as bands; cite the
+              appendix page.
+        - [ ] Current-week marker from
+              `starting_budget − my_faab_remaining` (not a fabricated
+              weekly personal spend line).
+        - [ ] Burn/hoard from remaining ÷ weeks left vs book-implied
+              remaining at this week.
     """),
 )
 
