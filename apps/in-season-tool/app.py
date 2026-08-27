@@ -643,41 +643,47 @@ with tab_faab:
             as_of_date=None if as_of_n is None else str(as_of_n),
         )
         if snap is not None:
-            p1, p2, p3 = st.columns(3)
-            p1.metric(
-                "Spent to date",
-                f"${snap.spent_to_date}",
-                help="starting_budget ($1,000) − my_faab_remaining. Not a weekly history.",
-            )
-            p2.metric(
-                "Pace",
-                STATUS_LABELS.get(snap.status, snap.status),
-                help=(
-                    f"Remaining ${snap.remaining} vs Elite ${snap.elite_remaining:.0f} "
-                    f"/ 1st quartile ${snap.q1_remaining:.0f} implied remaining at week "
-                    f"{snap.week}."
-                ),
-            )
-            p3.metric(
-                "$ / week left",
-                f"${snap.my_weekly_capacity:.0f}",
-                help=(
-                    f"Remaining ÷ {snap.weeks_remaining} weeks left. Elite "
-                    f"${snap.elite_weekly_capacity:.0f}/wk · 1st quartile "
-                    f"${snap.q1_weekly_capacity:.0f}/wk."
-                ),
-            )
-            st.plotly_chart(
-                build_pacing_chart(snap),
-                use_container_width=True,
-                config={"displayModeBar": False},
-            )
-            st.caption(PACING_CAPTION)
-            if snap.as_of_date:
-                st.caption(
-                    f"Remaining as of {snap.as_of_date} (season week {snap.week}). "
-                    "Update `dbt/seeds/faab_remaining.csv` after waivers."
+            pace_label = STATUS_LABELS.get(snap.status, snap.status)
+            with st.expander(
+                f"FAAB budget pacing — {pace_label} · ${snap.spent_to_date} spent",
+                expanded=True,
+                key=f"faab_pacing_expander_{league_key}",
+            ):
+                p1, p2, p3 = st.columns(3)
+                p1.metric(
+                    "Spent to date",
+                    f"${snap.spent_to_date}",
+                    help="starting_budget ($1,000) − my_faab_remaining. Not a weekly history.",
                 )
+                p2.metric(
+                    "Pace",
+                    pace_label,
+                    help=(
+                        f"Remaining ${snap.remaining} vs Elite ${snap.elite_remaining:.0f} "
+                        f"/ 1st quartile ${snap.q1_remaining:.0f} implied remaining at week "
+                        f"{snap.week}."
+                    ),
+                )
+                p3.metric(
+                    "$ / week left",
+                    f"${snap.my_weekly_capacity:.0f}",
+                    help=(
+                        f"Remaining ÷ {snap.weeks_remaining} weeks left. Elite "
+                        f"${snap.elite_weekly_capacity:.0f}/wk · 1st quartile "
+                        f"${snap.q1_weekly_capacity:.0f}/wk."
+                    ),
+                )
+                st.plotly_chart(
+                    build_pacing_chart(snap),
+                    use_container_width=True,
+                    config={"displayModeBar": False},
+                )
+                st.caption(PACING_CAPTION)
+                if snap.as_of_date:
+                    st.caption(
+                        f"Remaining as of {snap.as_of_date} (season week {snap.week}). "
+                        "Update `dbt/seeds/faab_remaining.csv` after waivers."
+                    )
 
     st.dataframe(
         out,
