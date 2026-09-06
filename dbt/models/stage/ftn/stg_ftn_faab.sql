@@ -117,27 +117,47 @@ overrides as (
         cast(ftn_team as varchar) as ftn_team,
         cast(nfbc_id as varchar) as nfbc_id
     from {{ ref('ftn_nfbc_player_overrides') }}
+),
+
+matched as (
+    select
+        coalesce(ovr.nfbc_id, nfbc.nfbc_id) as nfbc_id,
+        ftn.player_raw,
+        ftn.player_clean,
+        ftn.bid_change,
+        ftn.status_tag,
+        ftn.position,
+        ftn.team,
+        ftn.own_pct,
+        ftn.type,
+        ftn.low_bid,
+        ftn.high_bid,
+        ftn.notes_sp_matchups,
+        ftn.league_size,
+        ftn._ptkey
+    from ftn_keyed ftn
+    left join nfbc_keyed nfbc
+        on ftn.match_key = nfbc.match_key
+        and ftn.team = nfbc.nfbc_team
+    left join overrides ovr
+        on ftn.player_clean = ovr.ftn_player
+        and ftn.team = ovr.ftn_team
 )
 
-select
-    coalesce(ovr.nfbc_id, nfbc.nfbc_id) as nfbc_id,
-    ftn.player_raw,
-    ftn.player_clean,
-    ftn.bid_change,
-    ftn.status_tag,
-    ftn.position,
-    ftn.team,
-    ftn.own_pct,
-    ftn.type,
-    ftn.low_bid,
-    ftn.high_bid,
-    ftn.notes_sp_matchups,
-    ftn.league_size,
-    ftn._ptkey
-from ftn_keyed ftn
-left join nfbc_keyed nfbc
-    on ftn.match_key = nfbc.match_key
-    and ftn.team = nfbc.nfbc_team
-left join overrides ovr
-    on ftn.player_clean = ovr.ftn_player
-    and ftn.team = ovr.ftn_team
+-- FTN 15-team CSVs sometimes list the same player twice (exact dup or two
+-- Type/bid rows). Collapse to one row so mart_faab_worksheet grain
+-- (league, nfbc_id) holds. Prefer the row with a bid when they conflict.
+select *
+from matched
+qualify row_number() over (
+    partition by
+        league_size,
+        nfbc_id,
+        case when nfbc_id is null then player_clean end
+    order by
+        case when nullif(high_bid, '') is not null then 0 else 1 end,
+        case when nullif(low_bid, '') is not null then 0 else 1 end,
+        cast(nullif(high_bid, '') as int) desc nulls last,
+        cast(nullif(low_bid, '') as int) desc nulls last,
+        player_clean
+) = 1

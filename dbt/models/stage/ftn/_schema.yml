@@ -1,0 +1,25 @@
+version: 2
+
+models:
+  - name: stg_ftn_faab
+    description: >-
+      Latest FTN FAAB file, name-cleaned and matched to NFBC ids.
+      Vendor files can list the same player twice; this model keeps one
+      row per (league_size, nfbc_id) for matched players and
+      (league_size, player_clean) when nfbc_id is null. When two rows
+      conflict, the one with a bid wins.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - league_size
+              - nfbc_id
+          config:
+            where: "nfbc_id is not null"
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - league_size
+              - player_clean
+          config:
+            where: "nfbc_id is null"
