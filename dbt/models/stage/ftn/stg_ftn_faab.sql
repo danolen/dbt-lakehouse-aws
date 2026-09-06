@@ -142,22 +142,43 @@ matched as (
     left join overrides ovr
         on ftn.player_clean = ovr.ftn_player
         and ftn.team = ovr.ftn_team
-)
+),
 
 -- FTN 15-team CSVs sometimes list the same player twice (exact dup or two
 -- Type/bid rows). Collapse to one row so mart_faab_worksheet grain
 -- (league, nfbc_id) holds. Prefer the row with a bid when they conflict.
-select *
-from matched
-qualify row_number() over (
-    partition by
-        league_size,
-        nfbc_id,
-        case when nfbc_id is null then player_clean end
-    order by
-        case when nullif(high_bid, '') is not null then 0 else 1 end,
-        case when nullif(low_bid, '') is not null then 0 else 1 end,
-        cast(nullif(high_bid, '') as int) desc nulls last,
-        cast(nullif(low_bid, '') as int) desc nulls last,
-        player_clean
-) = 1
+ranked as (
+    select
+        *,
+        row_number() over (
+            partition by
+                league_size,
+                nfbc_id,
+                case when nfbc_id is null then player_clean end
+            order by
+                case when nullif(high_bid, '') is not null then 0 else 1 end,
+                case when nullif(low_bid, '') is not null then 0 else 1 end,
+                cast(nullif(high_bid, '') as int) desc nulls last,
+                cast(nullif(low_bid, '') as int) desc nulls last,
+                player_clean
+        ) as _rn
+    from matched
+)
+
+select
+    nfbc_id,
+    player_raw,
+    player_clean,
+    bid_change,
+    status_tag,
+    position,
+    team,
+    own_pct,
+    type,
+    low_bid,
+    high_bid,
+    notes_sp_matchups,
+    league_size,
+    _ptkey
+from ranked
+where _rn = 1
