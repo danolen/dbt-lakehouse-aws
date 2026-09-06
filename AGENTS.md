@@ -2,6 +2,22 @@
 
 ## Maintainer rules and preferences
 
+### Diagnose first; do not change code without approval
+
+- **Look-into / "why did this fail" requests are diagnosis-only.** Investigate,
+  report the cause, and stop. Do not implement a fix, relax a test, collapse
+  a grain, or open a "helpful" patch PR unless the maintainer explicitly
+  asks you to change code.
+- A diagnosis is not approval. Fixing logic can mask the real issue (for
+  example a vendor file listing the same player twice). Prefer leaving the
+  failure visible over shipping a defensive workaround.
+- It is fine to recommend a next step: *"I suggest we do this, but I will
+  not make any changes until you give me approval."* Do not assume a
+  suggestion should be implemented in the same turn.
+- **End every implementation turn with an open PR** only after the
+  maintainer has approved an implementation change. Diagnose-only turns
+  should not produce code or a PR.
+
 ### Git (required)
 
 - **Never commit directly to `master`.** All changes go on a **feature branch**, then a **pull request** for review.
@@ -14,7 +30,10 @@
 
 - Prefer **small, incremental updates** (one focused PR per meaningful chunk) over large sweeping refactors or mega-diffs unless the maintainer explicitly asks for a bigger change set.
 - Keep each change set **tied to a clear outcome** (e.g. one mart column set, one app tab slice) so review and rollback stay easy.
-- **End every implementation turn with an open PR** (create or update) and a short summary for the maintainer. Leave the PR open until they merge it.
+- **End every approved implementation turn with an open PR** (create or
+  update) and a short summary for the maintainer. Leave the PR open until
+  they merge it. Skip this when the request was diagnose-only and no
+  implementation was approved.
 
 ### AWS vs this repository
 
